@@ -45,7 +45,14 @@ export interface EditorState {
 
   // Timeline
   view: TimelineView;
-  cursor: number;            // sample position
+  /** Edit cursor — where the user last clicked or seeked. Stays put
+   *  during playback; used by anything that means "the user's position"
+   *  (Inspector "command at cursor", `set loop @ cursor`, etc.). */
+  cursor: number;
+  /** Playback cursor — live audio position. Driven by the audio renderer
+   *  while playing; on pause / stop / end-of-file it snaps back to
+   *  `cursor`. Equals `cursor` whenever no audio is playing. */
+  playCursor: number;
   selection: SampleRange | null;
 
   // Playback (stub until audio renderer is wired)
@@ -58,6 +65,9 @@ export interface EditorState {
   loadFile: (data: Uint8Array, name: string) => Promise<void>;
   setView: (v: TimelineView) => void;
   setCursor: (sample: number) => void;
+  /** Move the playback cursor without touching the edit cursor.
+   *  Called by the audio renderer's sample-advance callback. */
+  setPlayCursor: (sample: number) => void;
   setSelection: (s: SampleRange | null) => void;
   setSelectedCommand: (index: number | null) => void;
   setPlaying: (p: boolean) => void;
@@ -162,6 +172,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   view: { startSample: 0, endSample: 1 },
   cursor: 0,
+  playCursor: 0,
   selection: null,
   playing: false,
   selectedCommandIndex: null,
@@ -188,6 +199,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         revision: 0,
         view: { startSample: 0, endSample: total },
         cursor: 0,
+        playCursor: 0,
         selection: null,
       });
       // Pre-render audio in the background so the AudioRenderer +
@@ -200,8 +212,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   setView: (v) => set((s) => ({ view: clampView(v, s.totalSamples) })),
 
-  setCursor: (sample) => set((s) => ({
-    cursor: Math.max(0, Math.min(s.totalSamples, Math.floor(sample))),
+  setCursor: (sample) => set((s) => {
+    const clamped = Math.max(0, Math.min(s.totalSamples, Math.floor(sample)));
+    // When not playing, the play cursor follows the edit cursor so the
+    // next play() starts there. While playing, only the edit cursor
+    // moves; the audio keeps going from wherever it was.
+    return s.playing
+      ? { cursor: clamped }
+      : { cursor: clamped, playCursor: clamped };
+  }),
+
+  setPlayCursor: (sample) => set((s) => ({
+    playCursor: Math.max(0, Math.min(s.totalSamples, Math.floor(sample))),
   })),
 
   setSelection: (sel) => set((s) => {
@@ -332,6 +354,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       afterEdit(set, file);
       set({
         cursor: selection.start,
+        playCursor: selection.start,
         selection: null,
         selectedCommandIndex: null,
       });
@@ -417,6 +440,7 @@ async function restoreFromBytes(
     loopSample,
     revision: get().revision + 1,
     cursor: Math.max(0, Math.min(total, get().cursor)),
+    playCursor: Math.max(0, Math.min(total, get().cursor)),
     selection: null,
     selectedCommandIndex: null,
     view: newView,

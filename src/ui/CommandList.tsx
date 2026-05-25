@@ -60,7 +60,10 @@ export function CommandList() {
   const selectedCommandIndex = useEditorStore((s) => s.selectedCommandIndex);
   const setSelectedCommand = useEditorStore((s) => s.setSelectedCommand);
   const setCursor = useEditorStore((s) => s.setCursor);
-  const cursor = useEditorStore((s) => s.cursor);
+  // Auto-scroll follows the playback cursor — it equals the edit cursor
+  // when stopped, and tracks live audio while playing, so the list
+  // smoothly follows either kind of motion.
+  const playCursor = useEditorStore((s) => s.playCursor);
   // Watching commandCount + revision guarantees we recompute the filter and
   // re-render rows after every edit. The file object itself is mutated
   // in place so its reference doesn't change.
@@ -89,7 +92,7 @@ export function CommandList() {
   // filtered visual index when a selection is active.
   useEffect(() => {
     if (!file || visibleCount === 0) return;
-    const fileIdx = file.findCommandIndexAtSample(cursor);
+    const fileIdx = file.findCommandIndexAtSample(playCursor);
     if (fileIdx < 0) return;
     let visualIdx = fileIdx;
     if (filter.indices) {
@@ -103,7 +106,7 @@ export function CommandList() {
       rowVirtualizer.scrollToIndex(visualIdx, { align: 'center' });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cursor, file, visibleCount, revision]);
+  }, [playCursor, file, visibleCount, revision]);
 
   if (!file) {
     return (

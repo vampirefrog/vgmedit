@@ -27,7 +27,7 @@ const MIN_TIMELINE_HEIGHT = 160;
 
 export function App() {
   const file = useEditorStore((s) => s.file);
-  const setCursor = useEditorStore((s) => s.setCursor);
+  const setPlayCursor = useEditorStore((s) => s.setPlayCursor);
   const cursor = useEditorStore((s) => s.cursor);
   const playing = useEditorStore((s) => s.playing);
   const setPlaying = useEditorStore((s) => s.setPlaying);
@@ -54,19 +54,29 @@ export function App() {
     const initial = audio?.currentSample ?? cursor;
     audio?.dispose();
     const next = new LibVgmAudioRenderer({ pcm, initialSample: initial });
-    const unsubA = next.onSampleAdvance((s) => setCursor(s));
-    const unsubP = next.onPlayingChange((p) => setPlaying(p));
+    // Live audio sample-advance drives the play cursor only — the edit
+    // cursor stays put so the user's seek/click position is preserved
+    // across playback.
+    const unsubA = next.onSampleAdvance((s) => setPlayCursor(s));
+    const unsubP = next.onPlayingChange((p) => {
+      setPlaying(p);
+      // Reaper-style "stop returns to start": when playback ends (manual
+      // pause, natural EOF, or seek-induced stop), snap the play cursor
+      // back to wherever the edit cursor was.
+      if (!p) setPlayCursor(useEditorStore.getState().cursor);
+    });
     setAudio(next);
     if (wasPlaying) void next.play();
     return () => { unsubA(); unsubP(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file, pcm]);
 
-  // When the cursor moves outside of playback (e.g. clicking the
-  // timeline), keep the audio renderer's playhead in sync so the next
-  // play resumes there.
+  // While stopped, keep the audio playhead aligned with the edit cursor
+  // so the next play() resumes from where the user clicked. During
+  // playback the edit cursor is independent of the running audio (clicks
+  // move the edit cursor without seeking).
   useEffect(() => {
-    if (!audio) return;
+    if (!audio || audio.playing) return;
     if (Math.abs(audio.currentSample - cursor) > 1) {
       void audio.seek(cursor);
     }
@@ -90,8 +100,19 @@ export function App() {
       if (e.key === ' ' || e.code === 'Space') {
         e.preventDefault();
         if (!audio) return;
-        if (audio.playing) { audio.pause(); setPlaying(false); }
-        else { void audio.play(); setPlaying(true); }
+        if (audio.playing) {
+          audio.pause();
+          setPlaying(false);
+        } else {
+          // Start from the current edit cursor — playback follows from
+          // wherever the user last clicked.
+          const startSample = useEditorStore.getState().cursor;
+          void (async () => {
+            await audio.seek(startSample);
+            await audio.play();
+            setPlaying(true);
+          })();
+        }
         return;
       }
 

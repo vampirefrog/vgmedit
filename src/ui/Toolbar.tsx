@@ -49,6 +49,9 @@ export function Toolbar({ audio }: ToolbarProps) {
       audio.pause();
       setPlaying(false);
     } else {
+      // Start from the edit cursor (Reaper-style).
+      const start = useEditorStore.getState().cursor;
+      await audio.seek(start);
       await audio.play();
       setPlaying(true);
     }

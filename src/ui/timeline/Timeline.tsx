@@ -96,29 +96,31 @@ export function Timeline() {
   const revision = useEditorStore((s) => s.revision);
   const loopSample = useEditorStore((s) => s.loopSample);
   const pcm = useEditorStore((s) => s.pcm);
+  const playCursor = useEditorStore((s) => s.playCursor);
+  const playing = useEditorStore((s) => s.playing);
 
   const sections = useMemo(() => {
     if (!file) return [] as TrackSection[];
     return buildSections(file, usedChips, pcm);
   }, [file, usedChips, pcm]);
 
-  // Page-by-page auto-scroll: when the cursor crosses the right edge of
-  // the view (which happens continuously during playback), jump the view
-  // forward by one span so the playhead reappears near the left edge.
-  // Same on the left for backward seeks. Skipped while the user is
-  // actively dragging the view (panRef set) so middle-drag pans aren't
-  // fought by the autoscroll.
+  // Page-by-page auto-scroll: when the play cursor crosses the right
+  // edge of the view (which happens continuously during playback), jump
+  // the view forward by one span so the playhead reappears near the
+  // left edge. Driven by playCursor not cursor so editing clicks don't
+  // jump the camera around.
   useEffect(() => {
+    if (!playing) return;
     const span = view.endSample - view.startSample;
     if (span <= 0) return;
-    if (cursor >= view.endSample) {
-      setView({ startSample: cursor, endSample: cursor + span });
-    } else if (cursor < view.startSample) {
-      const start = Math.max(0, cursor - span * 0.1);
+    if (playCursor >= view.endSample) {
+      setView({ startSample: playCursor, endSample: playCursor + span });
+    } else if (playCursor < view.startSample) {
+      const start = Math.max(0, playCursor - span * 0.1);
       setView({ startSample: start, endSample: start + span });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cursor]);
+  }, [playCursor, playing]);
 
   // Per-section expansion state. Sub-tracks (waveform + spectrogram) start
   // hidden and are only mounted when the user clicks the chevron on their
@@ -267,6 +269,12 @@ export function Timeline() {
   // drawn — and clientWidth comes from the live areaWidthCss so the math
   // matches whatever the layout currently is.
   const cursorPx = Math.max(0, Math.min(areaWidthCss, conv.sampleToPx(cursor)));
+  const playCursorPx = playing
+    ? Math.max(0, Math.min(areaWidthCss, conv.sampleToPx(playCursor)))
+    : null;
+  const playCursorInView = playCursorPx !== null
+    && playCursor >= view.startSample
+    && playCursor <= view.endSample;
   let selStartPx = 0, selWidth = 0;
   if (selection) {
     const l = Math.max(0, Math.min(areaWidthCss, conv.sampleToPx(selection.start)));
@@ -342,7 +350,7 @@ export function Timeline() {
               }}
             />
           )}
-          {/* Cursor line */}
+          {/* Edit cursor — always visible, marks the user's position. */}
           <div
             style={{
               position: 'absolute',
@@ -355,7 +363,6 @@ export function Timeline() {
               boxShadow: '0 0 6px var(--cursor)',
             }}
           />
-          {/* Cursor label */}
           <div
             style={{
               position: 'absolute',
@@ -372,6 +379,20 @@ export function Timeline() {
           >
             {(cursor / VGM_SAMPLE_RATE).toFixed(3)}s · {Math.round(cursor)}
           </div>
+          {/* Play cursor — only while playing, snaps back to edit cursor
+              on stop so it disappears overlap-style. */}
+          {playCursorInView && playCursorPx !== null && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 0, bottom: 0,
+                left: playCursorPx, width: 2,
+                background: 'rgba(120, 220, 255, 0.85)',
+                pointerEvents: 'none',
+                boxShadow: '0 0 8px rgba(120, 220, 255, 0.7)',
+              }}
+            />
+          )}
           {/* Loop marker: dashed vertical line + small badge */}
           {loopVisible && loopPx !== null && (
             <>
