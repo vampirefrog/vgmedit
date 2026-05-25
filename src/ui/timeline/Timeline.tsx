@@ -345,9 +345,9 @@ export function Timeline() {
                   expandable={section.subTracks.length > 0}
                   expanded={isExpanded}
                   onToggleExpanded={() => toggleExpanded(section.id, section.chip)}
-                  muteable={section.chip !== null}
+                  muteable={section.chip !== null && isAudioChip(section.chip)}
                   muted={section.chip !== null && mutedChips.has(section.chip)}
-                  onToggleMute={section.chip !== null ? () => toggleChipMute(section.chip!) : undefined}
+                  onToggleMute={section.chip !== null && isAudioChip(section.chip) ? () => toggleChipMute(section.chip!) : undefined}
                   revision={revision}
                 />
                 {isExpanded && section.subTracks.map((t) => (
