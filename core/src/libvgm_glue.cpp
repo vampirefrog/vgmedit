@@ -183,29 +183,41 @@ uint8_t libvgm_chip_devid(uint8_t chip) {
     }
 }
 
-/* Apply muteOpts to every device whose libvgm type matches `wantedType`.
- * Iterates the player's enumerated device list (which knows the actual
- * instance numbers for dual-chip mode) rather than guessing instance IDs. */
+/* libvgm's actual mute is the per-channel bitmask, not the `disable`
+ * field (which is for suspending emulation entirely and isn't acted on
+ * by VGMPlayer::RefreshMuting). Setting chnMute = 0xFFFFFFFF masks all
+ * 32 possible channels of the chip; 0 = unmuted. We mirror the same
+ * mask to chnMute[1] so linked devices (the AY half of YM2608 etc.)
+ * follow along. */
+static void fill_mute_opts(PLR_MUTE_OPTS &opts, bool muted) {
+    opts.disable = 0x00;
+    opts.chnMute[0] = muted ? 0xFFFFFFFFu : 0u;
+    opts.chnMute[1] = muted ? 0xFFFFFFFFu : 0u;
+}
+
+/* Build a libvgm-style device ID directly rather than enumerating
+ * GetSongDeviceInfo (which was returning 0xFF in our setup despite
+ * the player being healthy). Matches the PLR_DEV_ID macro definition
+ * in player/playerbase.hpp:
+ *   PLR_DEV_ID(chip, instance) = 0x80000000 | (instance << 16) | chip
+ * SetDeviceMuting returns 0x80 for unknown IDs, which is harmless —
+ * we can call it speculatively for both instance 0 and 1 to cover
+ * dual-chip files without first knowing which is present. */
+static inline uint32_t make_dev_id(uint8_t chip, uint16_t instance) {
+    return 0x80000000u | ((uint32_t)instance << 16) | (uint32_t)chip;
+}
+
 static int apply_mute_for_type(libvgm_player_t *p, uint8_t wantedType, bool muted) {
     PlayerBase *engine = p->player.GetPlayer();
     if (!engine) return 1;
 
-    std::vector<PLR_DEV_INFO> devList;
-    if (engine->GetSongDeviceInfo(devList) != 0x00) return 1;
-
     PLR_MUTE_OPTS opts;
-    opts.disable = muted ? 0xFF : 0x00;
-    opts.chnMute[0] = 0;
-    opts.chnMute[1] = 0;
+    fill_mute_opts(opts, muted);
 
     int hit = 0;
-    for (size_t i = 0; i < devList.size(); ++i) {
-        // Skip linked devices — only mute the main device of each chip
-        // (its linked AYs etc. get muted alongside automatically).
-        if (devList[i].parentIdx != (UINT32)-1) continue;
-        if ((uint8_t)devList[i].type != wantedType) continue;
-        engine->SetDeviceMuting(devList[i].id, opts);
-        ++hit;
+    for (uint16_t inst = 0; inst < 2; ++inst) {
+        UINT8 rc = engine->SetDeviceMuting(make_dev_id(wantedType, inst), opts);
+        if (rc == 0x00) ++hit;
     }
     return hit > 0 ? 0 : 2;
 }
@@ -222,17 +234,18 @@ int libvgm_set_all_chips_muted(libvgm_player_t *p, int muted) {
     PlayerBase *engine = p->player.GetPlayer();
     if (!engine) return -1;
 
-    std::vector<PLR_DEV_INFO> devList;
-    if (engine->GetSongDeviceInfo(devList) != 0x00) return -1;
-
     PLR_MUTE_OPTS opts;
-    opts.disable = muted ? 0xFF : 0x00;
-    opts.chnMute[0] = 0;
-    opts.chnMute[1] = 0;
+    fill_mute_opts(opts, muted != 0);
 
-    for (size_t i = 0; i < devList.size(); ++i) {
-        if (devList[i].parentIdx != (UINT32)-1) continue;
-        engine->SetDeviceMuting(devList[i].id, opts);
+    // Sweep every chip type defined in our vgm_chip_t enum (1..41), both
+    // instances. Unknown IDs return 0x80 which we ignore — only the ones
+    // present in the file actually take effect.
+    for (uint8_t chip = 1; chip <= 41; ++chip) {
+        uint8_t devid = libvgm_chip_devid(chip);
+        if (devid == 0xFF) continue;
+        for (uint16_t inst = 0; inst < 2; ++inst) {
+            engine->SetDeviceMuting(make_dev_id(devid, inst), opts);
+        }
     }
     return 0;
 }
