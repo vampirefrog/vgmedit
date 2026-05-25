@@ -168,10 +168,16 @@ sed -i 's|self\.location\.href|""|g' "$WORKLET_TMP"
 {
   cat <<'SHIM'
 // --- AudioWorkletGlobalScope polyfill (prepended by build.sh) ---
-// Emscripten's worker runtime expects `self`, `self.location.href`, and
-// timers — none of which AudioWorkletGlobalScope exposes by default.
-// Patch them onto globalThis so `self.foo` lookups succeed; using
-// `var` declarations would only create local bindings.
+// Emscripten's worker runtime expects a handful of globals that
+// AudioWorkletGlobalScope doesn't expose (varies by browser):
+//   self          — Chrome has it, Firefox doesn't
+//   self.location — Chrome has it, Firefox returns undefined (also
+//                   sed'd out of the bundle for safety)
+//   setTimeout    — used in some async-startup paths
+//   atob          — used to decode SINGLE_FILE base64-embedded WASM
+//
+// We attach them to globalThis (not via `var`, which would only create
+// local bindings the Emscripten code can't see).
 (function () {
   var g = globalThis;
   if (typeof g.self === 'undefined') g.self = g;
@@ -179,6 +185,26 @@ sed -i 's|self\.location\.href|""|g' "$WORKLET_TMP"
   if (typeof g.setTimeout === 'undefined') {
     g.setTimeout = function (fn) { try { fn(); } catch (_) {} return 0; };
     g.clearTimeout = function () {};
+  }
+  if (typeof g.atob === 'undefined') {
+    // Standards-compliant base64 decoder. Used by Emscripten exactly once
+    // per worklet load to decode the embedded WASM blob.
+    var T = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+    g.atob = function (input) {
+      var s = String(input).replace(/[^A-Za-z0-9+/=]/g, '');
+      while (s.length % 4) s += '=';            // pad to multiple of 4
+      var out = '';
+      for (var i = 0; i < s.length; i += 4) {
+        var a = T.indexOf(s.charAt(i));
+        var b = T.indexOf(s.charAt(i + 1));
+        var c = T.indexOf(s.charAt(i + 2));     // 64 when '='
+        var d = T.indexOf(s.charAt(i + 3));     // 64 when '='
+        out += String.fromCharCode((a << 2) | (b >> 4));
+        if (c !== 64) out += String.fromCharCode(((b & 15) << 4) | (c >> 2));
+        if (d !== 64) out += String.fromCharCode(((c & 3) << 6) | d);
+      }
+      return out;
+    };
   }
 })();
 SHIM
