@@ -102,6 +102,24 @@ export function Timeline() {
     return buildSections(file, usedChips, pcm);
   }, [file, usedChips, pcm]);
 
+  // Page-by-page auto-scroll: when the cursor crosses the right edge of
+  // the view (which happens continuously during playback), jump the view
+  // forward by one span so the playhead reappears near the left edge.
+  // Same on the left for backward seeks. Skipped while the user is
+  // actively dragging the view (panRef set) so middle-drag pans aren't
+  // fought by the autoscroll.
+  useEffect(() => {
+    const span = view.endSample - view.startSample;
+    if (span <= 0) return;
+    if (cursor >= view.endSample) {
+      setView({ startSample: cursor, endSample: cursor + span });
+    } else if (cursor < view.startSample) {
+      const start = Math.max(0, cursor - span * 0.1);
+      setView({ startSample: start, endSample: start + span });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cursor]);
+
   // Per-section expansion state. Sub-tracks (waveform + spectrogram) start
   // hidden and are only mounted when the user clicks the chevron on their
   // parent heatmap row — keeps the default view focused on the command

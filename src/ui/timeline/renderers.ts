@@ -251,13 +251,22 @@ export class SpectrogramTrackRenderer implements TrackRenderer {
       hannWindow(re);
       fft(re, im);
 
-      // For each pixel row, look up bin magnitude, map to intensity (0..255).
+      // Normalise FFT magnitude. The Hann window has a coherent gain of
+      // ~0.5 (sum/N), so a full-scale sine yields a peak bin around N/4.
+      // Dividing by that gives a normalised value where 1.0 ≈ full-scale,
+      // and chiptune bins land in the 0.001..0.3 range that the dB
+      // window below resolves into visible colors.
+      const norm = 1 / (FFT_SIZE * 0.25);
+      // dB window: anything quieter than -70 dB → black, anything louder
+      // than -10 dB → top of palette. Chosen by eye against real VGM
+      // material — the old [-80, 0] range washed everything to white.
+      const DB_LO = -70, DB_HI = -10;
+      const DB_RANGE = DB_HI - DB_LO;
       for (let y = 0; y < view.heightPx; y++) {
         const bin = yToBin[y];
-        const mag = Math.sqrt(re[bin] * re[bin] + im[bin] * im[bin]);
-        // dB scale, clamp into [-80, 0] then map to [0, 255].
+        const mag = Math.sqrt(re[bin] * re[bin] + im[bin] * im[bin]) * norm;
         const db = 20 * Math.log10(mag + 1e-9);
-        const t = Math.max(0, Math.min(1, (db + 80) / 80));
+        const t = Math.max(0, Math.min(1, (db - DB_LO) / DB_RANGE));
         const o = t * 255 | 0;
         const lutOff = o * 4;
         const di = (y * view.widthPx + px) * 4;

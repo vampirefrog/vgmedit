@@ -1,26 +1,18 @@
 /**
- * TypeScript facade for the libvgm-backed renderer.
+ * Main-thread facade for the libvgm-backed renderer. Offloads work to a
+ * Web Worker so the WASM render doesn't freeze the UI.
  *
- * Single entry point: `renderVgmToPcm(bytes, sampleRate)` opens the file
- * in libvgm, renders the whole song to interleaved Float32 stereo PCM in
- * one pass, and returns the buffer along with the source's reported total
- * sample count. The PCM array is what the waveform / spectrogram
- * renderers and the Web Audio playback path all consume.
+ * Single entry point: `renderVgmToPcm(bytes, sampleRate)` posts the bytes
+ * to a long-lived worker, awaits the reply, and resolves with the
+ * Float32 PCM the worker rendered. The worker keeps its own libvgm
+ * module instance and reuses it across requests, so subsequent renders
+ * skip the WASM load cost.
  *
- * "Whole-file pre-render" was chosen for simplicity in this first cut —
- * editor seeks are cheap (just move the AudioBufferSource read head),
- * waveform/spectrogram queries are random-access reads against a plain
- * typed array, and edits invalidate the PCM cleanly. Long files can take
- * a few hundred ms to render; that's hidden behind a Promise so the UI
- * stays responsive.
+ * Pre-rendering the whole file was chosen for simplicity in this first
+ * cut: editor seeks become cheap AudioBufferSource offsets, waveform
+ * and spectrogram queries are random-access reads into the typed
+ * array, and edits invalidate the PCM cleanly.
  */
-import createVgmCore, { type VgmCoreModule } from './vgmcore.js';
-
-let modPromise: Promise<VgmCoreModule> | null = null;
-function load(): Promise<VgmCoreModule> {
-  if (!modPromise) modPromise = createVgmCore();
-  return modPromise;
-}
 
 export interface RenderedPcm {
   /** Interleaved stereo float samples in [-1, 1]; length = frames * 2. */
@@ -31,48 +23,54 @@ export interface RenderedPcm {
   sampleRate: number;
 }
 
-const CHUNK_FRAMES = 4096;
+let worker: Worker | null = null;
+let nextId = 1;
+const pending = new Map<number, {
+  resolve: (pcm: RenderedPcm) => void;
+  reject: (err: Error) => void;
+}>();
 
-export async function renderVgmToPcm(
-  bytes: Uint8Array,
-  sampleRate: number,
-): Promise<RenderedPcm> {
-  const mod = await load();
-
-  const dataPtr = mod._malloc(bytes.length);
-  mod.HEAPU8.set(bytes, dataPtr);
-  const player = mod._libvgm_open(dataPtr, bytes.length, sampleRate);
-  mod._free(dataPtr);
-  if (!player) throw new Error('libvgm_open failed');
-
-  try {
-    // libvgm reports the file's natural length here (including its loop
-    // iteration count). With loopCount=1 in the player config, this is
-    // intro + one loop pass = exactly what we want to bake into the
-    // PCM buffer. libvgm's Render() keeps producing samples past the
-    // end (it'd loop forever if asked), so the cap below is what stops
-    // us — not a 0-return.
-    const total = Number(mod._libvgm_total_samples(player));
-    if (total <= 0) throw new Error('libvgm reports zero total samples');
-
-    const out = new Float32Array(total * 2);
-    const scratchPtr = mod._malloc(CHUNK_FRAMES * 4);   // s16 stereo = 4 bytes/frame
-    let outFrames = 0;
-
-    while (outFrames < total) {
-      const want = Math.min(CHUNK_FRAMES, total - outFrames);
-      const got = mod._libvgm_render_s16(player, scratchPtr, want);
-      if (got === 0) break;
-      const src = new Int16Array(mod.HEAPU8.buffer, scratchPtr, got * 2);
-      for (let i = 0; i < src.length; i++) {
-        out[outFrames * 2 + i] = src[i] / 32768;
-      }
-      outFrames += got;
+function getWorker(): Worker {
+  if (worker) return worker;
+  worker = new Worker(new URL('./libvgm.worker.ts', import.meta.url), { type: 'module' });
+  worker.onmessage = (e: MessageEvent<{
+    id: number;
+    frames?: number;
+    sampleRate?: number;
+    pcm?: Float32Array;
+    error?: string;
+  }>) => {
+    const slot = pending.get(e.data.id);
+    if (!slot) return;
+    pending.delete(e.data.id);
+    if (e.data.error) {
+      slot.reject(new Error(e.data.error));
+    } else if (e.data.pcm && e.data.frames !== undefined && e.data.sampleRate !== undefined) {
+      slot.resolve({ data: e.data.pcm, frames: e.data.frames, sampleRate: e.data.sampleRate });
+    } else {
+      slot.reject(new Error('worker returned malformed response'));
     }
-    mod._free(scratchPtr);
+  };
+  worker.onerror = (e) => {
+    // Surface worker-level errors to any in-flight requests; the next
+    // call lazily respawns a fresh worker.
+    for (const slot of pending.values()) slot.reject(new Error(e.message || 'worker error'));
+    pending.clear();
+    worker?.terminate();
+    worker = null;
+  };
+  return worker;
+}
 
-    return { data: out.subarray(0, outFrames * 2), frames: outFrames, sampleRate };
-  } finally {
-    mod._libvgm_close(player);
-  }
+export function renderVgmToPcm(bytes: Uint8Array, sampleRate: number): Promise<RenderedPcm> {
+  const id = nextId++;
+  const w = getWorker();
+  return new Promise<RenderedPcm>((resolve, reject) => {
+    pending.set(id, { resolve, reject });
+    // Copy the bytes — the caller may keep the original around and we
+    // don't want to risk a detached buffer if we transferred them.
+    const owned = new Uint8Array(bytes.length);
+    owned.set(bytes);
+    w.postMessage({ id, bytes: owned, sampleRate }, [owned.buffer]);
+  });
 }
