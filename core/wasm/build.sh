@@ -154,6 +154,13 @@ em++ "${OBJS[@]}" \
   -sEXPORTED_RUNTIME_METHODS=UTF8ToString \
   -o "$WORKLET_TMP"
 
+# AudioWorkletGlobalScope doesn't expose `self.location` (or makes it a
+# sealed undefined). Emscripten's worker startup reads
+# `scriptDirectory = self.location.href` for relative-asset URLs; SINGLE_FILE
+# means we don't need any relative assets, so neutralize the read so the
+# bundle stops dying on it.
+sed -i 's|self\.location\.href|""|g' "$WORKLET_TMP"
+
 # AudioWorkletGlobalScope doesn't define `self` (Emscripten's `worker`
 # environment assumes it does) and doesn't have `setTimeout` /
 # `queueMicrotask` everywhere. Prepend a tiny shim before the Emscripten
@@ -161,15 +168,19 @@ em++ "${OBJS[@]}" \
 {
   cat <<'SHIM'
 // --- AudioWorkletGlobalScope polyfill (prepended by build.sh) ---
-var self = globalThis;
-var location = location || { href: '' };
-if (typeof setTimeout === 'undefined') {
-  // AudioWorklet doesn't expose timers. Emscripten's runtime mostly
-  // uses them for async startup paths we don't hit; an immediate
-  // execution is fine as a stand-in for the few cases that fire.
-  var setTimeout = function (fn) { try { fn(); } catch (_) {} return 0; };
-  var clearTimeout = function () {};
-}
+// Emscripten's worker runtime expects `self`, `self.location.href`, and
+// timers — none of which AudioWorkletGlobalScope exposes by default.
+// Patch them onto globalThis so `self.foo` lookups succeed; using
+// `var` declarations would only create local bindings.
+(function () {
+  var g = globalThis;
+  if (typeof g.self === 'undefined') g.self = g;
+  if (typeof g.location === 'undefined') g.location = { href: '' };
+  if (typeof g.setTimeout === 'undefined') {
+    g.setTimeout = function (fn) { try { fn(); } catch (_) {} return 0; };
+    g.clearTimeout = function () {};
+  }
+})();
 SHIM
   cat "$WORKLET_TMP"
   cat "$CORE_DIR/wasm/worklet-processor.js"
