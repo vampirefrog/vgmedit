@@ -11,6 +11,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { VGM_SAMPLE_RATE, VgmChip, type VgmChipId, type VgmFile } from '../../wasm/index.js';
+import type { RenderedPcm } from '../../wasm/libvgm.js';
 import { useEditorStore } from '../../state/store.js';
 import {
   HeatmapTrackRenderer,
@@ -41,7 +42,7 @@ function isAudioChip(chip: VgmChipId): boolean {
       && chip !== VgmChip.NONE;
 }
 
-function buildSections(file: VgmFile, chips: VgmChipId[]): TrackSection[] {
+function buildSections(file: VgmFile, chips: VgmChipId[], pcm: RenderedPcm | null): TrackSection[] {
   const sections: TrackSection[] = [];
   sections.push({
     id: 'master',
@@ -52,8 +53,8 @@ function buildSections(file: VgmFile, chips: VgmChipId[]): TrackSection[] {
       cssHeight: 56,
     }),
     subTracks: [
-      new WaveformTrackRenderer('wave-master', 'Master waveform'),
-      new SpectrogramTrackRenderer('spec-master', 'Master spectrogram'),
+      new WaveformTrackRenderer('wave-master', 'Master waveform', pcm),
+      new SpectrogramTrackRenderer('spec-master', 'Master spectrogram', pcm),
     ],
   });
   for (const chip of chips) {
@@ -62,9 +63,13 @@ function buildSections(file: VgmFile, chips: VgmChipId[]): TrackSection[] {
     sections.push({
       id: `chip-${chip}`,
       heatmap: makeChipHeatmap(file, chip, short),
+      // Per-chip waveform/spectrogram would need libvgm chip-mute + re-
+      // render per chip. For now share the master PCM so the slots have
+      // something visible; they'll get distinct per-chip audio in a
+      // follow-up.
       subTracks: audio ? [
-        new WaveformTrackRenderer(`wave-${chip}`, `${short} wave`),
-        new SpectrogramTrackRenderer(`spec-${chip}`, `${short} spec`),
+        new WaveformTrackRenderer(`wave-${chip}`, `${short} wave`, pcm),
+        new SpectrogramTrackRenderer(`spec-${chip}`, `${short} spec`, pcm),
       ] : [],
     });
   }
@@ -90,11 +95,12 @@ export function Timeline() {
   const panBy = useEditorStore((s) => s.panBy);
   const revision = useEditorStore((s) => s.revision);
   const loopSample = useEditorStore((s) => s.loopSample);
+  const pcm = useEditorStore((s) => s.pcm);
 
   const sections = useMemo(() => {
     if (!file) return [] as TrackSection[];
-    return buildSections(file, usedChips);
-  }, [file, usedChips]);
+    return buildSections(file, usedChips, pcm);
+  }, [file, usedChips, pcm]);
 
   // Per-section expansion state. Sub-tracks (waveform + spectrogram) start
   // hidden and are only mounted when the user clicks the chevron on their

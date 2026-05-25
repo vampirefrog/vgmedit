@@ -7,7 +7,8 @@
  * samples. The command list filter is derived from the selection.
  */
 import { create } from 'zustand';
-import { VgmFile, type VgmChipId } from '../wasm/index.js';
+import { VgmFile, VGM_SAMPLE_RATE, type VgmChipId } from '../wasm/index.js';
+import { renderVgmToPcm, type RenderedPcm } from '../wasm/libvgm.js';
 
 export interface TimelineView {
   startSample: number;
@@ -31,6 +32,12 @@ export interface EditorState {
   loopSample: number | null;
   /** Command index of the loop-start command, or null when no loop is set. */
   loopIndex: number | null;
+
+  /** Rendered audio for the current file. null while a render is in
+   *  flight (or before the first one finishes). */
+  pcm: RenderedPcm | null;
+  /** True while the libvgm-backed pre-render is running. */
+  pcmRendering: boolean;
   /** Bumped whenever the loaded file mutates. Components that read derived
    *  data (heatmap, formatted commands, args) subscribe to this to know
    *  when to re-read from the C side. */
@@ -96,6 +103,28 @@ const MAX_HISTORY = 50;
 const undoStack: Uint8Array[] = [];
 const redoStack: Uint8Array[] = [];
 
+// Render-token / race guard: each kickoff bumps this so a stale render
+// completing after a newer one (or a load) is silently ignored.
+let pcmRenderToken = 0;
+
+async function kickOffPcmRender(
+  set: (partial: Partial<EditorState>) => void,
+  get: () => EditorState,
+  bytes: Uint8Array,
+): Promise<void> {
+  const token = ++pcmRenderToken;
+  set({ pcm: null, pcmRendering: true });
+  try {
+    const pcm = await renderVgmToPcm(bytes, VGM_SAMPLE_RATE);
+    if (token !== pcmRenderToken) return;  // stale — newer render in flight
+    set({ pcm, pcmRendering: false });
+  } catch (err) {
+    if (token !== pcmRenderToken) return;
+    set({ pcmRendering: false, loadError: 'audio render failed: ' + (err as Error).message });
+  }
+  void get;  // suppress unused
+}
+
 function clearHistory(): void {
   undoStack.length = 0;
   redoStack.length = 0;
@@ -125,6 +154,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   usedChips: [],
   loopSample: null,
   loopIndex: null,
+  pcm: null,
+  pcmRendering: false,
   revision: 0,
   canUndo: false,
   canRedo: false,
@@ -159,6 +190,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         cursor: 0,
         selection: null,
       });
+      // Pre-render audio in the background so the AudioRenderer +
+      // waveform/spectrogram can come online.
+      void kickOffPcmRender(set, get, data);
     } catch (err) {
       set({ loadError: (err as Error).message ?? String(err) });
     }
@@ -329,7 +363,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 }));
 
 /** Refresh store state derived from the (just-mutated) VgmFile. Also
- *  refreshes canUndo/canRedo since this is called after every edit. */
+ *  refreshes canUndo/canRedo since this is called after every edit, and
+ *  re-renders the audio PCM since the command stream just changed. */
 function afterEdit(set: (partial: Partial<EditorState>) => void, file: VgmFile): void {
   const loopIdx = file.getLoopIndex();
   const loopSample = loopIdx === null ? null : file.getCommand(loopIdx).sampleTime;
@@ -343,6 +378,9 @@ function afterEdit(set: (partial: Partial<EditorState>) => void, file: VgmFile):
     canUndo: undoStack.length > 0,
     canRedo: redoStack.length > 0,
   });
+  // Trigger a fresh PCM render from the post-edit byte stream.
+  const bytes = file.serialize();
+  void kickOffPcmRender(set, useEditorStore.getState, bytes);
 }
 
 /** Replace the loaded file with one parsed from `bytes`. Used by undo/redo
@@ -385,4 +423,6 @@ async function restoreFromBytes(
     canUndo: undoStack.length > 0,
     canRedo: redoStack.length > 0,
   });
+  // Undo/redo restored the byte stream — re-render its audio too.
+  void kickOffPcmRender(set, get, bytes);
 }

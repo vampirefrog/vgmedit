@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 #
-# Build vgmcore as a single-file ES module for the web frontend.
-#
-# Outputs:
-#   src/wasm/vgmcore.js  — ESM that default-exports an async module factory
-#
-# The WASM binary is base64-embedded (SINGLE_FILE=1) so Vite can bundle it
-# without extra plugins or .wasm asset wiring. If/when this gets large we
-# can switch to a separate .wasm file.
+# Build the WASM module:
+#   1. Build the libvgm static libs (utils + emu + player) for emscripten,
+#      caching the build in core/vendor/libvgm-build so subsequent runs
+#      skip straight to step 3.
+#   2. Compile our own vgmcore + glue sources.
+#   3. Link everything into a single ES module at src/wasm/vgmcore.js,
+#      with the .wasm binary base64-embedded (SINGLE_FILE=1) so Vite
+#      doesn't need any extra asset wiring.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
-CORE_DIR="$(pwd)/core"
-OUT_DIR="$(pwd)/src/wasm"
+ROOT="$(pwd)"
+CORE_DIR="$ROOT/core"
+OUT_DIR="$ROOT/src/wasm"
 mkdir -p "$OUT_DIR"
 
 if ! command -v emcc >/dev/null 2>&1; then
@@ -25,14 +26,69 @@ if ! command -v emcc >/dev/null 2>&1; then
   fi
 fi
 
-SRCS=(
+EMSDK_ROOT="${EMSDK:-$HOME/emsdk}"
+ZLIB_INC="$EMSDK_ROOT/upstream/emscripten/cache/sysroot/include"
+ZLIB_LIB="$EMSDK_ROOT/upstream/emscripten/cache/sysroot/lib/wasm32-emscripten/libz.a"
+
+# Pre-build the emscripten zlib port so libvgm's find_package(ZLIB) succeeds.
+if [[ ! -f "$ZLIB_LIB" ]]; then
+  echo "[build] embuilder zlib"
+  embuilder build zlib >/dev/null
+fi
+
+# ---- 1. libvgm submodule + static build ----------------------------------
+LIBVGM_SRC="$CORE_DIR/vendor/libvgm"
+if [[ ! -d "$LIBVGM_SRC/.git" && ! -d "$LIBVGM_SRC/utils" ]]; then
+  echo "[build] cloning libvgm"
+  mkdir -p "$CORE_DIR/vendor"
+  git clone --depth 1 https://github.com/ValleyBell/libvgm.git "$LIBVGM_SRC"
+fi
+
+LIBVGM_BUILD="$CORE_DIR/vendor/libvgm-build"
+if [[ ! -f "$LIBVGM_BUILD/bin/libvgm-player.a" ]]; then
+  echo "[build] configuring + compiling libvgm (slow first run)"
+  mkdir -p "$LIBVGM_BUILD"
+  ( cd "$LIBVGM_BUILD" && emcmake cmake "$LIBVGM_SRC" \
+      -DBUILD_LIBAUDIO=OFF -DBUILD_TESTS=OFF \
+      -DBUILD_PLAYER=OFF -DBUILD_VGM2WAV=OFF \
+      -DUTIL_THREADING=OFF -DUTIL_CHARSET_CONV=OFF \
+      -DLIBRARY_TYPE=STATIC -DUSE_SANITIZERS=OFF \
+      -DZLIB_INCLUDE_DIR="$ZLIB_INC" -DZLIB_LIBRARY="$ZLIB_LIB" \
+      > /dev/null )
+  ( cd "$LIBVGM_BUILD" && emmake make -j"$(nproc)" > /dev/null )
+fi
+
+# ---- 2 + 3. our sources + glue + link ------------------------------------
+C_SRCS=(
   "$CORE_DIR/src/parser.c"
   "$CORE_DIR/src/commands.c"
   "$CORE_DIR/src/heatmap.c"
   "$CORE_DIR/src/format.c"
   "$CORE_DIR/src/edit.c"
+  "$CORE_DIR/src/libvgm_stubs.c"
   "$CORE_DIR/wasm/bindings.c"
 )
+CXX_SRCS=(
+  "$CORE_DIR/src/libvgm_glue.cpp"
+)
+
+OBJ_DIR="$ROOT/core/vendor/vgmcore-build"
+mkdir -p "$OBJ_DIR"
+
+INC=( -I "$CORE_DIR/include" -I "$CORE_DIR/src" -I "$LIBVGM_SRC" )
+COMMON_FLAGS=( -O2 -Wall -Wextra -sUSE_ZLIB=1 )
+
+OBJS=()
+for src in "${C_SRCS[@]}"; do
+  obj="$OBJ_DIR/$(basename "${src%.*}").o"
+  emcc -std=c99 "${COMMON_FLAGS[@]}" "${INC[@]}" -c "$src" -o "$obj"
+  OBJS+=("$obj")
+done
+for src in "${CXX_SRCS[@]}"; do
+  obj="$OBJ_DIR/$(basename "${src%.*}").o"
+  em++ -std=c++14 "${COMMON_FLAGS[@]}" "${INC[@]}" -c "$src" -o "$obj"
+  OBJS+=("$obj")
+done
 
 EXPORTS=(
   _malloc _free
@@ -48,16 +104,17 @@ EXPORTS=(
   _vgm_delete_range
   _vgm_sizeof_command_entry _vgm_sizeof_header _vgm_chip_count
   _vgm_offsetof_header_chip_clocks
+  _libvgm_open _libvgm_close _libvgm_render_s16
+  _libvgm_seek_sample _libvgm_current_sample _libvgm_total_samples
 )
-
 EXPORT_LIST=$(IFS=,; echo "${EXPORTS[*]}")
 
-emcc "${SRCS[@]}" \
-  -I "$CORE_DIR/include" \
-  -I "$CORE_DIR/src" \
+em++ "${OBJS[@]}" \
+  "$LIBVGM_BUILD/bin/libvgm-player.a" \
+  "$LIBVGM_BUILD/bin/libvgm-emu.a" \
+  "$LIBVGM_BUILD/bin/libvgm-utils.a" \
   -O2 \
-  -std=c99 \
-  -Wall -Wextra \
+  -sUSE_ZLIB=1 \
   -sMODULARIZE=1 \
   -sEXPORT_ES6=1 \
   -sENVIRONMENT=web,worker,node \
@@ -69,4 +126,4 @@ emcc "${SRCS[@]}" \
   -sEXPORTED_RUNTIME_METHODS=UTF8ToString \
   -o "$OUT_DIR/vgmcore.js"
 
-echo "built $OUT_DIR/vgmcore.js"
+echo "[build] $OUT_DIR/vgmcore.js"

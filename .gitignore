@@ -9,3 +9,6 @@ src/wasm/vgmcore.js
 
 # Generated demo VGM (run scripts/make_test_vgm.mjs to recreate).
 scripts/sample.vgm
+
+# libvgm source clone + its emcc build output + our intermediate .o files.
+core/vendor/

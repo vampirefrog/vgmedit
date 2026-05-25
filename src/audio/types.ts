@@ -19,6 +19,7 @@
 import type { VgmFile } from '../wasm/index.js';
 
 export type SampleAdvanceListener = (sample: number) => void;
+export type PlayingChangeListener = (playing: boolean) => void;
 
 export interface AudioRenderer {
   readonly currentSample: number;
@@ -44,6 +45,10 @@ export interface AudioRenderer {
 
   /** Subscribe to playhead movement. Returns an unsubscribe fn. */
   onSampleAdvance(listener: SampleAdvanceListener): () => void;
+
+  /** Subscribe to play/pause transitions (including the natural
+   *  end-of-file transition). Returns an unsubscribe fn. */
+  onPlayingChange(listener: PlayingChangeListener): () => void;
 
   /** Release any platform resources. */
   dispose(): void;

@@ -7,7 +7,12 @@
  * is mirrored so the editor can run identically once a real backend lands.
  */
 import { VGM_SAMPLE_RATE } from '../wasm/index.js';
-import type { AudioRenderer, AudioRendererOptions, SampleAdvanceListener } from './types.js';
+import type {
+  AudioRenderer,
+  AudioRendererOptions,
+  PlayingChangeListener,
+  SampleAdvanceListener,
+} from './types.js';
 
 export class StubAudioRenderer implements AudioRenderer {
   readonly sampleRate: number;
@@ -77,6 +82,10 @@ export class StubAudioRenderer implements AudioRenderer {
   onSampleAdvance(listener: SampleAdvanceListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  onPlayingChange(_listener: PlayingChangeListener): () => void {
+    return () => undefined;
   }
 
   dispose(): void {

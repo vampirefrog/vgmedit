@@ -26,6 +26,8 @@ export function Toolbar({ audio }: ToolbarProps) {
   const canRedo = useEditorStore((s) => s.canRedo);
   const undo = useEditorStore((s) => s.undo);
   const redo = useEditorStore((s) => s.redo);
+  const pcmRendering = useEditorStore((s) => s.pcmRendering);
+  const pcm = useEditorStore((s) => s.pcm);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -67,7 +69,10 @@ export function Toolbar({ audio }: ToolbarProps) {
       <button disabled={!canUndo} onClick={() => void undo()} title="Undo (Ctrl+Z)">↶</button>
       <button disabled={!canRedo} onClick={() => void redo()} title="Redo (Ctrl+Y or Ctrl+Shift+Z)">↷</button>
       <span className="spacer" />
-      <button onClick={togglePlay} disabled={!audio}>
+      {pcmRendering && (
+        <span style={{ color: 'var(--accent-2)', fontSize: 11 }}>rendering audio…</span>
+      )}
+      <button onClick={togglePlay} disabled={!audio} title={pcm ? 'Play / pause (Space)' : 'audio not ready'}>
         {playing ? '❚❚' : '▶'}
       </button>
       <button

@@ -54,6 +54,13 @@ export interface VgmCoreModule {
   _vgm_set_loop_index(handle: number, index: number): number;
   _vgm_delete_range(handle: number, startSample: bigint, endSample: bigint): number;
 
+  _libvgm_open(dataPtr: number, size: number, sampleRate: number): number;
+  _libvgm_close(player: number): void;
+  _libvgm_render_s16(player: number, bufPtr: number, frameCount: number): number;
+  _libvgm_seek_sample(player: number, samplePos: bigint): number;
+  _libvgm_current_sample(player: number): bigint;
+  _libvgm_total_samples(player: number): bigint;
+
   _vgm_sizeof_command_entry(): number;
   _vgm_sizeof_header(): number;
   _vgm_chip_count(): number;

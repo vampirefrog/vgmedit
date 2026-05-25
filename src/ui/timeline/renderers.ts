@@ -13,6 +13,8 @@
  *   - SpectrogramTrackRenderer: placeholder waiting for an FFT pipeline.
  */
 import { VGM_CHIP_FILTER_ALL, chipBit, type VgmChipId, type VgmFile } from '../../wasm/index.js';
+import type { RenderedPcm } from '../../wasm/libvgm.js';
+import { fft, hannWindow } from '../../audio/fft.js';
 import { FIRE_PALETTE } from './palette.js';
 
 export interface TrackView {
@@ -109,49 +111,162 @@ export function makeChipHeatmap(file: VgmFile, chip: VgmChipId, name: string): H
   });
 }
 
-/* --- Placeholder renderers for waveform & spectrogram ------------------- */
+/* --- Waveform + spectrogram renderers (PCM-backed) ---------------------- */
 
-abstract class PlaceholderRenderer implements TrackRenderer {
-  abstract readonly id: string;
-  abstract readonly name: string;
-  abstract readonly kind: 'waveform' | 'spectrogram';
+function drawPlaceholderStrip(
+  ctx: CanvasRenderingContext2D,
+  view: TrackView,
+  label: string,
+): void {
+  ctx.fillStyle = '#0c0c10';
+  ctx.fillRect(0, 0, view.widthPx, view.heightPx);
+  ctx.fillStyle = 'rgba(255,255,255,0.025)';
+  for (let x = 0; x < view.widthPx; x += 14) ctx.fillRect(x, 0, 7, view.heightPx);
+  ctx.fillStyle = '#444455';
+  ctx.font = `${Math.floor(view.heightPx * 0.28)}px ui-sans-serif, system-ui, sans-serif`;
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, 8, view.heightPx / 2);
+}
+
+export class WaveformTrackRenderer implements TrackRenderer {
+  readonly kind = 'waveform' as const;
   readonly cssHeight = 64;
-  protected label = 'pending audio renderer';
+  constructor(
+    public readonly id: string,
+    public readonly name: string,
+    private readonly pcm: RenderedPcm | null,
+  ) {}
+
   draw(ctx: CanvasRenderingContext2D, view: TrackView): void {
-    ctx.fillStyle = '#0c0c10';
+    if (!this.pcm) { drawPlaceholderStrip(ctx, view, 'waveform — rendering audio…'); return; }
+    const { data, frames } = this.pcm;
+    ctx.fillStyle = '#06060a';
     ctx.fillRect(0, 0, view.widthPx, view.heightPx);
 
-    // Subtle stripe pattern so the slot is visibly reserved.
-    ctx.fillStyle = 'rgba(255,255,255,0.025)';
-    for (let x = 0; x < view.widthPx; x += 14) ctx.fillRect(x, 0, 7, view.heightPx);
+    // Zero baseline.
+    ctx.fillStyle = '#222230';
+    ctx.fillRect(0, Math.floor(view.heightPx / 2), view.widthPx, 1);
 
-    ctx.fillStyle = '#444455';
-    ctx.font = `${Math.floor(view.heightPx * 0.28)}px ui-sans-serif, system-ui, sans-serif`;
-    ctx.textBaseline = 'middle';
-    ctx.fillText(this.label, 8, view.heightPx / 2);
+    const startSample = Math.max(0, Math.floor(view.startSample));
+    const endSample = Math.min(frames, Math.ceil(view.endSample));
+    const span = Math.max(1, endSample - startSample);
+    const mid = view.heightPx / 2;
+    const halfH = view.heightPx / 2;
+
+    ctx.strokeStyle = '#66bbff';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+
+    // For each pixel column, find min/max in its sample window and draw a
+    // vertical strip from min to max — the standard audio waveform view.
+    for (let px = 0; px < view.widthPx; px++) {
+      const s0 = startSample + Math.floor((px      / view.widthPx) * span);
+      const s1 = startSample + Math.floor(((px + 1) / view.widthPx) * span);
+      const hi = Math.min(frames, Math.max(s0 + 1, s1));
+      let mn = Infinity, mx = -Infinity;
+      // Step through one channel (L) when zoomed in finely, otherwise mix
+      // L and R to a mono peak — close enough for visual amplitude.
+      for (let s = s0; s < hi; s++) {
+        const l = data[s * 2];
+        const r = data[s * 2 + 1];
+        const v = (l + r) * 0.5;
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+      }
+      if (!isFinite(mn)) continue;
+      const y0 = mid - mx * halfH;
+      const y1 = mid - mn * halfH;
+      ctx.moveTo(px + 0.5, y0);
+      ctx.lineTo(px + 0.5, y1 + 0.0001);
+    }
+    ctx.stroke();
   }
 }
 
-export class WaveformTrackRenderer extends PlaceholderRenderer {
-  readonly id: string;
-  readonly name: string;
-  readonly kind = 'waveform' as const;
-  constructor(id: string, name: string) {
-    super();
-    this.id = id;
-    this.name = name;
-    this.label = 'waveform — pending libvgm';
-  }
-}
+const FFT_SIZE = 1024;
+const SPEC_RE = new Float32Array(FFT_SIZE);
+const SPEC_IM = new Float32Array(FFT_SIZE);
 
-export class SpectrogramTrackRenderer extends PlaceholderRenderer {
-  readonly id: string;
-  readonly name: string;
+export class SpectrogramTrackRenderer implements TrackRenderer {
   readonly kind = 'spectrogram' as const;
-  constructor(id: string, name: string) {
-    super();
-    this.id = id;
-    this.name = name;
-    this.label = 'spectrogram — pending audio render';
+  readonly cssHeight = 96;
+  constructor(
+    public readonly id: string,
+    public readonly name: string,
+    private readonly pcm: RenderedPcm | null,
+  ) {}
+
+  draw(ctx: CanvasRenderingContext2D, view: TrackView): void {
+    if (!this.pcm) { drawPlaceholderStrip(ctx, view, 'spectrogram — rendering audio…'); return; }
+    const { data, frames, sampleRate } = this.pcm;
+    if (view.widthPx <= 0 || view.heightPx <= 0) return;
+
+    // Background.
+    ctx.fillStyle = '#06060a';
+    ctx.fillRect(0, 0, view.widthPx, view.heightPx);
+
+    const startSample = Math.max(0, Math.floor(view.startSample));
+    const endSample = Math.min(frames, Math.ceil(view.endSample));
+    const span = Math.max(1, endSample - startSample);
+    const halfFft = FFT_SIZE >> 1;
+
+    // Pre-build an image so we do one putImageData rather than per-pixel
+    // fill calls. RGBA = widthPx * heightPx * 4.
+    const img = ctx.createImageData(view.widthPx, view.heightPx);
+    const out = img.data;
+
+    // Map FFT bin -> y pixel using a logarithmic frequency scale. Bin k
+    // is at frequency k * sampleRate / FFT_SIZE. We span ~30 Hz to
+    // Nyquist for a typical chiptune-friendly view.
+    const minHz = 30;
+    const maxHz = sampleRate / 2;
+    const logMin = Math.log(minHz);
+    const logMax = Math.log(maxHz);
+    // Precompute y -> bin lookup once per draw.
+    const yToBin = new Int32Array(view.heightPx);
+    for (let y = 0; y < view.heightPx; y++) {
+      // y = 0 is top = high freq, y = h-1 is bottom = low freq.
+      const t = 1 - y / Math.max(1, view.heightPx - 1);
+      const hz = Math.exp(logMin + (logMax - logMin) * t);
+      const bin = Math.round(hz / sampleRate * FFT_SIZE);
+      yToBin[y] = Math.max(1, Math.min(halfFft - 1, bin));
+    }
+
+    const re = SPEC_RE, im = SPEC_IM;
+
+    for (let px = 0; px < view.widthPx; px++) {
+      // Centre an FFT window on the sample that this column represents.
+      const centre = startSample + Math.floor((px + 0.5) / view.widthPx * span);
+      const s0 = Math.max(0, centre - halfFft);
+      const s1 = Math.min(frames, s0 + FFT_SIZE);
+      // Fill window (mono mix), zero-padding if near edges.
+      for (let i = 0; i < FFT_SIZE; i++) im[i] = 0;
+      const have = s1 - s0;
+      for (let i = 0; i < have; i++) {
+        const l = data[(s0 + i) * 2];
+        const r = data[(s0 + i) * 2 + 1];
+        re[i] = (l + r) * 0.5;
+      }
+      for (let i = have; i < FFT_SIZE; i++) re[i] = 0;
+      hannWindow(re);
+      fft(re, im);
+
+      // For each pixel row, look up bin magnitude, map to intensity (0..255).
+      for (let y = 0; y < view.heightPx; y++) {
+        const bin = yToBin[y];
+        const mag = Math.sqrt(re[bin] * re[bin] + im[bin] * im[bin]);
+        // dB scale, clamp into [-80, 0] then map to [0, 255].
+        const db = 20 * Math.log10(mag + 1e-9);
+        const t = Math.max(0, Math.min(1, (db + 80) / 80));
+        const o = t * 255 | 0;
+        const lutOff = o * 4;
+        const di = (y * view.widthPx + px) * 4;
+        out[di]     = FIRE_PALETTE[lutOff];
+        out[di + 1] = FIRE_PALETTE[lutOff + 1];
+        out[di + 2] = FIRE_PALETTE[lutOff + 2];
+        out[di + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
   }
 }
