@@ -84,12 +84,12 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file, revision]);
 
-  // While stopped, keep the audio playhead aligned with the edit cursor
-  // so the next play() resumes from where the user clicked. During
-  // playback the edit cursor is independent of the running audio (clicks
-  // move the edit cursor without seeking).
+  // Keep the audio playhead aligned with the edit cursor whenever it
+  // moves — applies both when stopped (so the next play() resumes from
+  // the clicked position) and during playback (clicks immediately seek
+  // the live audio to the new position).
   useEffect(() => {
-    if (!audio || audio.playing) return;
+    if (!audio) return;
     if (Math.abs(audio.currentSample - cursor) > 1) {
       void audio.seek(cursor);
     }

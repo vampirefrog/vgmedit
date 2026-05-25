@@ -244,12 +244,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   setCursor: (sample) => set((s) => {
     const clamped = Math.max(0, Math.min(s.totalSamples, Math.floor(sample)));
-    // When not playing, the play cursor follows the edit cursor so the
-    // next play() starts there. While playing, only the edit cursor
-    // moves; the audio keeps going from wherever it was.
-    return s.playing
-      ? { cursor: clamped }
-      : { cursor: clamped, playCursor: clamped };
+    // Edit cursor and play cursor follow each other in both states: when
+    // paused, the play cursor stays where the user can start from; while
+    // playing, the play cursor visibly snaps to the click and the
+    // audio renderer's seek (kicked off by the App-level cursor effect)
+    // jumps libvgm to match.
+    return { cursor: clamped, playCursor: clamped };
   }),
 
   setPlayCursor: (sample) => set((s) => ({
