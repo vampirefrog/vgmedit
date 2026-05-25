@@ -19,7 +19,8 @@ import { Inspector } from './Inspector.js';
 import { Toolbar } from './Toolbar.js';
 import { DropZone } from './DropZone.js';
 import { HorizontalSplitter } from './Splitter.js';
-import { LibVgmAudioRenderer } from '../audio/libvgm.js';
+import { RealtimeVgmAudioRenderer } from '../audio/realtime.js';
+import { getCachedModule } from '../wasm/index.js';
 import type { AudioRenderer } from '../audio/types.js';
 
 const MIN_BOTTOM_HEIGHT = 120;
@@ -31,8 +32,8 @@ export function App() {
   const cursor = useEditorStore((s) => s.cursor);
   const playing = useEditorStore((s) => s.playing);
   const setPlaying = useEditorStore((s) => s.setPlaying);
-  const pcm = useEditorStore((s) => s.pcm);
   const loopSample = useEditorStore((s) => s.loopSample);
+  const revision = useEditorStore((s) => s.revision);
   const deleteSelection = useEditorStore((s) => s.deleteSelection);
   const undo = useEditorStore((s) => s.undo);
   const redo = useEditorStore((s) => s.redo);
@@ -40,41 +41,42 @@ export function App() {
   const [audio, setAudio] = useState<AudioRenderer | null>(null);
   const [bottomHeight, setBottomHeight] = useState(320);
 
-  // Rebuild the audio renderer whenever the PCM is (re-)rendered. Edits
-  // trigger a fresh render upstream; we follow by disposing the previous
-  // renderer and instantiating a new one over the new buffer. The cursor
-  // sample and playing state carry across so playback resumes seamlessly.
+  // Rebuild the audio renderer whenever the file or revision changes.
+  // The realtime renderer holds its own libvgm instance; on edits we
+  // dispose the old one and open a new one with the freshly-serialized
+  // bytes so playback reflects the current file. Cursor + playing carry
+  // across so playback resumes seamlessly.
   useEffect(() => {
-    if (!file || !pcm) {
+    if (!file) {
       audio?.dispose();
       setAudio(null);
       setPlaying(false);
       return;
     }
+    const mod = getCachedModule();
+    if (!mod) return;  // Shouldn't happen once a file is loaded.
     const wasPlaying = audio?.playing ?? false;
     const initial = audio?.currentSample ?? cursor;
     audio?.dispose();
-    const next = new LibVgmAudioRenderer({
-      pcm,
+    const next = new RealtimeVgmAudioRenderer({
+      mod,
+      bytes: file.serialize(),
+      sampleRate: 44100,
       initialSample: initial,
       loopSample: useEditorStore.getState().loopSample,
     });
-    // Live audio sample-advance drives the play cursor only — the edit
-    // cursor stays put so the user's seek/click position is preserved
-    // across playback.
     const unsubA = next.onSampleAdvance((s) => setPlayCursor(s));
     const unsubP = next.onPlayingChange((p) => {
       setPlaying(p);
-      // Reaper-style "stop returns to start": when playback ends (manual
-      // pause, natural EOF, or seek-induced stop), snap the play cursor
-      // back to wherever the edit cursor was.
+      // Reaper-style: when playback ends (manual pause, natural EOF,
+      // seek-induced stop), snap the play cursor back to the edit cursor.
       if (!p) setPlayCursor(useEditorStore.getState().cursor);
     });
     setAudio(next);
     if (wasPlaying) void next.play();
     return () => { unsubA(); unsubP(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [file, pcm]);
+  }, [file, revision]);
 
   // While stopped, keep the audio playhead aligned with the edit cursor
   // so the next play() resumes from where the user clicked. During
@@ -114,10 +116,27 @@ export function App() {
         if (audio.playing) {
           audio.pause();
           setPlaying(false);
+          return;
+        }
+        const state = useEditorStore.getState();
+        if (e.shiftKey && state.selection) {
+          // Shift+Space: loop the selected sample range. The realtime
+          // renderer seeks back to selection.start on every cross of
+          // selection.end so the user can audition the loop transition
+          // exactly as libvgm would play it.
+          const sel = state.selection;
+          (audio as RealtimeVgmAudioRenderer).setSelectionLoop?.({ start: sel.start, end: sel.end });
+          void (async () => {
+            await audio.seek(sel.start);
+            await audio.play();
+            setPlaying(true);
+          })();
         } else {
-          // Start from the current edit cursor — playback follows from
-          // wherever the user last clicked.
-          const startSample = useEditorStore.getState().cursor;
+          // Normal Space: play from the edit cursor. Clear any
+          // selection-loop mode so playback uses the file's loop point
+          // (or runs to EOF and stops).
+          (audio as RealtimeVgmAudioRenderer).setSelectionLoop?.(null);
+          const startSample = state.cursor;
           void (async () => {
             await audio.seek(startSample);
             await audio.play();

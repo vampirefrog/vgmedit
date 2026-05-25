@@ -101,6 +101,7 @@ export interface HeatmapOptions {
 }
 
 let moduleSingleton: Promise<VgmCoreModule> | null = null;
+let cachedModule: VgmCoreModule | null = null;
 let sizeofCommandEntry = 0;
 let chipCount = 0;
 let chipClocksOffset = 0;
@@ -111,10 +112,19 @@ async function loadModule(): Promise<VgmCoreModule> {
       sizeofCommandEntry = mod._vgm_sizeof_command_entry();
       chipCount = mod._vgm_chip_count();
       chipClocksOffset = mod._vgm_offsetof_header_chip_clocks();
+      cachedModule = mod;
       return mod;
     });
   }
   return moduleSingleton;
+}
+
+/** Synchronous access to the loaded module — only valid after a successful
+ *  `VgmFile.open` or explicit `initVgmCore()` call. Used by code paths
+ *  that need to call WASM in callbacks where awaiting would be wrong
+ *  (e.g. audio-thread scheduling). */
+export function getCachedModule(): VgmCoreModule | null {
+  return cachedModule;
 }
 
 /** Read a possibly-padded uint64 from WASM heap as a JS Number. */
