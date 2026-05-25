@@ -230,6 +230,37 @@ else {
   mod._vgm_close(h2);
 }
 
+// --- Loop point round-trip --------------------------------------------- //
+console.log();
+console.log('--- set loop on command #3, serialize, reparse, verify ---');
+let rc2 = mod._vgm_set_loop_index(handle, 3);
+console.log('set_loop rc:', rc2);
+const loopIdx1 = mod._vgm_get_loop_index(handle);
+console.log('get_loop after set:', loopIdx1);
+
+const needed2 = mod._vgm_serialize(handle, 0, 0);
+const outPtr2 = mod._malloc(needed2);
+mod._vgm_serialize(handle, outPtr2, needed2);
+const out2 = new Uint8Array(mod.HEAPU8.buffer, outPtr2, needed2).slice();
+mod._free(outPtr2);
+
+const reopen2 = mod._malloc(out2.length);
+mod.HEAPU8.set(out2, reopen2);
+const stP2 = mod._malloc(4);
+const h3 = mod._vgm_open(reopen2, out2.length, stP2);
+mod._free(reopen2);
+mod._free(stP2);
+const reparseLoop = h3 ? mod._vgm_get_loop_index(h3) : -1;
+console.log('loop index in serialized+reparsed file:', reparseLoop);
+if (reparseLoop !== 3) { console.log('  ROUND-TRIP MISMATCH'); pass = false; }
+else { console.log('  loop survives serialize+reparse'); }
+if (h3) mod._vgm_close(h3);
+
+// Clear loop and verify
+mod._vgm_set_loop_index(handle, -1);
+if (mod._vgm_get_loop_index(handle) !== -1) { console.log('clear loop failed'); pass = false; }
+else console.log('clear loop works');
+
 mod._free(entryBuf);
 mod._free(fmtBuf);
 mod._vgm_close(handle);

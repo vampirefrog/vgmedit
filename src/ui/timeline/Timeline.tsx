@@ -89,6 +89,7 @@ export function Timeline() {
   const zoomBy = useEditorStore((s) => s.zoomBy);
   const panBy = useEditorStore((s) => s.panBy);
   const revision = useEditorStore((s) => s.revision);
+  const loopSample = useEditorStore((s) => s.loopSample);
 
   const sections = useMemo(() => {
     if (!file) return [] as TrackSection[];
@@ -249,6 +250,9 @@ export function Timeline() {
     selStartPx = l;
     selWidth = Math.max(0, r - l);
   }
+  // Loop marker — only visible when the loop sample is in the current view.
+  const loopPx = loopSample !== null ? conv.sampleToPx(loopSample) : null;
+  const loopVisible = loopPx !== null && loopPx >= 0 && loopPx <= areaWidthCss;
 
   return (
     <div className="timeline-pane" style={{ display: 'flex', flexDirection: 'column' }}>
@@ -344,6 +348,36 @@ export function Timeline() {
           >
             {(cursor / VGM_SAMPLE_RATE).toFixed(3)}s · {Math.round(cursor)}
           </div>
+          {/* Loop marker: dashed vertical line + small badge */}
+          {loopVisible && loopPx !== null && (
+            <>
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 0, bottom: 0,
+                  left: loopPx, width: 0,
+                  borderLeft: '1px dashed var(--loop)',
+                  pointerEvents: 'none',
+                }}
+              />
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: 2,
+                  left: loopPx + 4,
+                  padding: '1px 4px',
+                  background: '#000',
+                  color: 'var(--loop)',
+                  fontSize: 10,
+                  fontFamily: 'ui-monospace, Menlo, monospace',
+                  pointerEvents: 'none',
+                  borderRadius: 2,
+                }}
+              >
+                loop
+              </div>
+            </>
+          )}
         </div>
       </div>
       <div style={{ display: 'flex', flexShrink: 0 }}>

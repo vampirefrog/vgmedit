@@ -73,7 +73,11 @@ export interface VgmHeader {
   gd3Offset: number;
   eofOffset: number;
   totalSamples: number;
+  /** Absolute byte offset of the loop command in the *original* file; not
+   *  kept in sync after edits — use `VgmFile.getLoopIndex()` instead. */
   loopOffset: number;
+  /** Number of samples in one loop cycle (totalSamples - loop_start_sample).
+   *  Kept up-to-date by the C edit ops. */
   loopSamples: number;
   rate: number;
   chipClocks: Record<number, number>;  // chip id → Hz, only entries with clock > 0
@@ -269,6 +273,22 @@ export class VgmFile {
     return rc;
   }
 
+  /** Returns the index of the command flagged as the loop point, or null
+   *  if no loop is set. */
+  getLoopIndex(): number | null {
+    const idx = this.mod._vgm_get_loop_index(this.handle);
+    return idx < 0 ? null : idx;
+  }
+
+  /** Sets (or clears with null) the loop point. The loop is tracked by a
+   *  per-command flag, not a file offset, so it stays pinned to the same
+   *  command across inserts/deletes around it. */
+  setLoopIndex(index: number | null): number {
+    const rc = this.mod._vgm_set_loop_index(this.handle, index === null ? -1 : index);
+    if (rc === 0) this.refresh();
+    return rc;
+  }
+
   /** Re-emit the current command list as a VGM byte stream. */
   serialize(): Uint8Array {
     const needed = this.mod._vgm_serialize(this.handle, 0, 0);
@@ -280,13 +300,14 @@ export class VgmFile {
     return out;
   }
 
-  /** Re-read commandCount and header.totalSamples after a mutation. The
-   *  vgm_header_t struct lives in the WASM heap and the C edit ops keep it
-   *  up to date in place, so we just re-decode it. */
+  /** Re-read commandCount and the header fields that the C edit ops mutate
+   *  in place (totalSamples, loopOffset, loopSamples). */
   private refresh(): void {
     this.commandCount = this.mod._vgm_command_count(this.handle);
     const headerPtr = this.mod._vgm_header(this.handle);
     this.header.totalSamples = readU64(this.mod, headerPtr + 16);
+    this.header.loopOffset = this.mod.HEAPU32[(headerPtr + 24) >>> 2];
+    this.header.loopSamples = this.mod.HEAPU32[(headerPtr + 28) >>> 2];
   }
 
   /**

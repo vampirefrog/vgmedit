@@ -237,6 +237,18 @@ static int parse_commands(vgm_file_t *file) {
     if (file->header.total_samples == 0) {
         file->header.total_samples = sample_time;
     }
+
+    /* Restore the loop flag on whichever parsed command originally lived at
+     * header.loop_offset. The header's loop_offset was already resolved to
+     * an absolute file offset by parse_header. */
+    if (file->header.loop_offset != 0) {
+        for (uint32_t i = 0; i < file->command_count; i++) {
+            if (file->commands[i].file_offset == file->header.loop_offset) {
+                file->commands[i].flags |= VGM_CMD_FLAG_LOOP;
+                break;
+            }
+        }
+    }
     return VGM_OK;
 }
 

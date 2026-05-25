@@ -44,6 +44,7 @@ EXPORTS=(
   _vgm_chip_name _vgm_chip_short_name
   _vgm_insert_command _vgm_delete_command _vgm_update_command
   _vgm_serialize
+  _vgm_get_loop_index _vgm_set_loop_index
   _vgm_sizeof_command_entry _vgm_sizeof_header _vgm_chip_count
   _vgm_offsetof_header_chip_clocks
 )

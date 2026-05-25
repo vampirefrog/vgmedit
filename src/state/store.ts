@@ -27,6 +27,10 @@ export interface EditorState {
   totalSamples: number;
   commandCount: number;
   usedChips: VgmChipId[];
+  /** Sample time of the loop-start command, or null when no loop is set. */
+  loopSample: number | null;
+  /** Command index of the loop-start command, or null when no loop is set. */
+  loopIndex: number | null;
   /** Bumped whenever the loaded file mutates. Components that read derived
    *  data (heatmap, formatted commands, args) subscribe to this to know
    *  when to re-read from the C side. */
@@ -59,6 +63,14 @@ export interface EditorState {
   insertCommand: (beforeIndex: number, opcode: number, args: Uint8Array) => number;
   updateCommand: (index: number, opcode: number, args: Uint8Array) => number;
   deleteCommand: (index: number) => number;
+
+  /** Set the loop point to the command at the given index, or clear it
+   *  by passing null. Pins to the command, not the file offset, so it
+   *  survives nearby inserts/deletes. */
+  setLoopIndex: (index: number | null) => number;
+  /** Convenience: find the command at the current cursor sample and set
+   *  the loop there. */
+  setLoopAtCursor: () => number;
 }
 
 function clampView(view: TimelineView, total: number): TimelineView {
@@ -83,6 +95,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   totalSamples: 0,
   commandCount: 0,
   usedChips: [],
+  loopSample: null,
+  loopIndex: null,
   revision: 0,
 
   view: { startSample: 0, endSample: 1 },
@@ -98,6 +112,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     try {
       const file = await VgmFile.open(data);
       const total = file.header.totalSamples || 1;
+      const loopIdx = file.getLoopIndex();
+      const loopSample = loopIdx === null ? null : file.getCommand(loopIdx).sampleTime;
       set({
         file,
         fileName: name,
@@ -105,6 +121,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         totalSamples: total,
         commandCount: file.commandCount,
         usedChips: file.usedChips(),
+        loopIndex: loopIdx,
+        loopSample,
         revision: 0,
         view: { startSample: 0, endSample: total },
         cursor: 0,
@@ -191,14 +209,36 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
     return rc;
   },
+
+  setLoopIndex: (index) => {
+    const file = get().file;
+    if (!file) return -1;
+    const rc = file.setLoopIndex(index);
+    if (rc === 0) afterEdit(set, file);
+    return rc;
+  },
+
+  setLoopAtCursor: () => {
+    const file = get().file;
+    if (!file) return -1;
+    const idx = file.findCommandIndexAtSample(get().cursor);
+    if (idx < 0) return -4;
+    const rc = file.setLoopIndex(idx);
+    if (rc === 0) afterEdit(set, file);
+    return rc;
+  },
 }));
 
 /** Refresh store state derived from the (just-mutated) VgmFile. */
 function afterEdit(set: (partial: Partial<EditorState>) => void, file: VgmFile): void {
+  const loopIdx = file.getLoopIndex();
+  const loopSample = loopIdx === null ? null : file.getCommand(loopIdx).sampleTime;
   set({
     commandCount: file.commandCount,
     totalSamples: file.header.totalSamples || 1,
     usedChips: file.usedChips(),
+    loopIndex: loopIdx,
+    loopSample,
     revision: useEditorStore.getState().revision + 1,
   });
 }

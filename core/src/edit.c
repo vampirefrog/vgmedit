@@ -64,6 +64,17 @@ static void recompute_sample_times_from(vgm_file_t *file, uint32_t from_index) {
         t += vgm_command_wait_advance(file->commands[i].opcode, args, size);
     }
     file->header.total_samples = t;
+
+    /* Keep header.loop_samples consistent with the post-edit sample times.
+     * total_samples just changed, and the loop command's sample_time may
+     * have shifted too (insert/delete before it). */
+    int loop_idx = vgm_get_loop_index(file);
+    if (loop_idx >= 0) {
+        file->header.loop_samples =
+            (uint32_t)(t - file->commands[loop_idx].sample_time);
+    } else {
+        file->header.loop_samples = 0;
+    }
 }
 
 /* Copy or zero `arg_size` bytes into a fresh malloc. Returns NULL when
@@ -184,7 +195,14 @@ int vgm_serialize(const vgm_file_t *file, uint8_t *buf, uint32_t buf_size) {
     if (!file) return VGM_ERR_INVALID_ARG;
 
     uint32_t cmds_size = 0;
+    /* Track the loop command's serialized byte offset (absolute), if any. */
+    uint32_t loop_serialized_offset = 0;
+    int loop_idx = -1;
     for (uint32_t i = 0; i < file->command_count; i++) {
+        if (file->commands[i].flags & VGM_CMD_FLAG_LOOP) {
+            loop_serialized_offset = file->header.data_offset + cmds_size;
+            loop_idx = (int)i;
+        }
         cmds_size += 1u + file->commands[i].arg_size;
     }
     uint32_t total = file->header.data_offset + cmds_size;
@@ -193,14 +211,20 @@ int vgm_serialize(const vgm_file_t *file, uint8_t *buf, uint32_t buf_size) {
     if (buf_size < total) return VGM_ERR_INVALID_ARG;
 
     /* Copy the original header verbatim, then fix up the fields that move
-     * after edits. GD3 and loop offsets aren't preserved across edits yet
-     * — zero them out to avoid pointing at the wrong place. */
+     * after edits. GD3 isn't preserved across edits yet — zero it out. */
     memcpy(buf, file->data, file->header.data_offset);
     write_u32le(buf + 0x04, total - 0x04);                /* eof_offset (rel) */
     write_u32le(buf + 0x14, 0);                            /* gd3_offset */
     write_u32le(buf + 0x18, (uint32_t)file->header.total_samples);
-    write_u32le(buf + 0x1C, 0);                            /* loop_offset */
-    write_u32le(buf + 0x20, 0);                            /* loop_samples */
+    if (loop_idx >= 0) {
+        /* loop_offset is relative to its own field position (0x1C). */
+        write_u32le(buf + 0x1C, loop_serialized_offset - 0x1Cu);
+        uint64_t loop_samples = file->header.total_samples - file->commands[loop_idx].sample_time;
+        write_u32le(buf + 0x20, (uint32_t)loop_samples);
+    } else {
+        write_u32le(buf + 0x1C, 0);                        /* loop_offset */
+        write_u32le(buf + 0x20, 0);                        /* loop_samples */
+    }
 
     uint8_t *out = buf + file->header.data_offset;
     for (uint32_t i = 0; i < file->command_count; i++) {
@@ -215,4 +239,34 @@ int vgm_serialize(const vgm_file_t *file, uint8_t *buf, uint32_t buf_size) {
         }
     }
     return (int)total;
+}
+
+int vgm_get_loop_index(const vgm_file_t *file) {
+    if (!file) return -1;
+    for (uint32_t i = 0; i < file->command_count; i++) {
+        if (file->commands[i].flags & VGM_CMD_FLAG_LOOP) return (int)i;
+    }
+    return -1;
+}
+
+int vgm_set_loop_index(vgm_file_t *file, int index) {
+    if (!file) return VGM_ERR_INVALID_ARG;
+    if (index < -1 || (index >= 0 && (uint32_t)index >= file->command_count)) {
+        return VGM_ERR_INVALID_INDEX;
+    }
+    /* Clear any existing loop flag — there can only ever be one. */
+    for (uint32_t i = 0; i < file->command_count; i++) {
+        file->commands[i].flags &= (uint16_t)~VGM_CMD_FLAG_LOOP;
+    }
+    if (index >= 0) {
+        file->commands[index].flags |= VGM_CMD_FLAG_LOOP;
+        /* Keep the header's exposed loop_samples in sync with the new
+         * loop point so JS readers don't see a stale value. */
+        file->header.loop_samples = (uint32_t)(file->header.total_samples -
+                                               file->commands[index].sample_time);
+    } else {
+        file->header.loop_offset = 0;
+        file->header.loop_samples = 0;
+    }
+    return VGM_OK;
 }

@@ -96,6 +96,9 @@ typedef struct {
     uint32_t chip_clocks[VGM_CHIP_COUNT];  /* 0 if chip absent */
 } vgm_header_t;
 
+/* Per-command flag bits stored in vgm_command_entry_t.flags. */
+#define VGM_CMD_FLAG_LOOP 0x0001u   /* this command is the VGM loop point */
+
 /* One parsed command. file_offset == 0xFFFFFFFF for synthesized commands. */
 typedef struct {
     uint64_t sample_time;
@@ -103,7 +106,7 @@ typedef struct {
     uint32_t arg_size;
     uint8_t  opcode;
     uint8_t  chip_id;
-    uint16_t flags;          /* reserved */
+    uint16_t flags;          /* VGM_CMD_FLAG_* */
 } vgm_command_entry_t;
 
 typedef struct vgm_file_s vgm_file_t;
@@ -170,6 +173,23 @@ int vgm_update_command(vgm_file_t *file, uint32_t index,
  * count required; if `buf` is NULL or `buf_size` is 0, computes the size
  * without writing. */
 int vgm_serialize(const vgm_file_t *file, uint8_t *buf, uint32_t buf_size);
+
+/* Loop point operations.
+ *
+ * The loop point is tracked by setting VGM_CMD_FLAG_LOOP on the target
+ * command, not by a file offset — so insert/delete around the loop point
+ * keep it pinned to the same command. On parse, the flag is restored by
+ * looking up the original loop_offset against parsed command offsets.
+ * On serialize, the flagged command's serialized byte offset is written
+ * back into the header's loop_offset field (and loop_samples is recomputed
+ * from totalSamples and the loop command's sample_time).
+ *
+ * vgm_get_loop_index returns the command index, or -1 when no loop is set.
+ * vgm_set_loop_index sets the loop on `index` (clearing any prior flag),
+ * or clears the loop entirely when called with -1.
+ */
+int vgm_get_loop_index(const vgm_file_t *file);
+int vgm_set_loop_index(vgm_file_t *file, int index);
 
 #ifdef __cplusplus
 }

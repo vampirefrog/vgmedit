@@ -10,6 +10,7 @@
   --selection: rgba(255, 122, 0, 0.18);
   --selection-stroke: rgba(255, 122, 0, 0.8);
   --cursor: #ffeb66;
+  --loop: #66ff9a;
 
   font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   font-size: 13px;

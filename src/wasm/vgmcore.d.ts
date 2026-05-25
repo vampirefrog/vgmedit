@@ -50,6 +50,8 @@ export interface VgmCoreModule {
     opcode: number, argsPtr: number, argSize: number,
   ): number;
   _vgm_serialize(handle: number, buf: number, bufSize: number): number;
+  _vgm_get_loop_index(handle: number): number;
+  _vgm_set_loop_index(handle: number, index: number): number;
 
   _vgm_sizeof_command_entry(): number;
   _vgm_sizeof_header(): number;

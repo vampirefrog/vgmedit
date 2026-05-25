@@ -28,9 +28,13 @@ export function Inspector() {
   const selection = useEditorStore((s) => s.selection);
   const cursor = useEditorStore((s) => s.cursor);
   const revision = useEditorStore((s) => s.revision);
+  const loopIndex = useEditorStore((s) => s.loopIndex);
+  const loopSample = useEditorStore((s) => s.loopSample);
   const insertCommand = useEditorStore((s) => s.insertCommand);
   const updateCommand = useEditorStore((s) => s.updateCommand);
   const deleteCommand = useEditorStore((s) => s.deleteCommand);
+  const setLoopIndex = useEditorStore((s) => s.setLoopIndex);
+  const setLoopAtCursor = useEditorStore((s) => s.setLoopAtCursor);
 
   const [cmd, setCmd] = useState<VgmCommand | null>(null);
   const [formatted, setFormatted] = useState<string>('');
@@ -150,6 +154,39 @@ export function Inspector() {
           view: {Math.round(view.startSample)}–{Math.round(view.endSample)}<br />
           selection: {selection ? `${selection.start}–${selection.end}` : '—'}
         </div>
+      </div>
+
+      <h3 style={{ marginTop: 18 }}>loop</h3>
+      <div className="field">
+        <label>loop point</label>
+        <div className="mono" style={{ fontSize: 11 }}>
+          {loopIndex !== null && loopSample !== null ? (
+            <>
+              command #{loopIndex} @ {loopSample.toLocaleString()} samples<br />
+              ({(loopSample / VGM_SAMPLE_RATE).toFixed(3)}s · loop length {(
+                (totalSamples - loopSample) / VGM_SAMPLE_RATE
+              ).toFixed(3)}s)
+            </>
+          ) : '— no loop —'}
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <button
+          onClick={() => setEditStatus(describeRc('loop @ cursor', setLoopAtCursor()))}
+          title="Set loop point to the command at the current cursor position"
+        >set @ cursor</button>
+        <button
+          disabled={selectedCommandIndex === null}
+          onClick={() => {
+            if (selectedCommandIndex === null) return;
+            setEditStatus(describeRc('loop @ selected', setLoopIndex(selectedCommandIndex)));
+          }}
+          title="Set loop point to the selected command in the list"
+        >set @ selected</button>
+        <button
+          disabled={loopIndex === null}
+          onClick={() => setEditStatus(describeRc('clear loop', setLoopIndex(null)))}
+        >clear loop</button>
       </div>
 
       <h3 style={{ marginTop: 18 }}>command</h3>
