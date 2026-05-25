@@ -184,6 +184,10 @@ export class RealtimeVgmAudioRenderer implements AudioRenderer {
     this._loopSample = sample;
   }
 
+  setChipMuted(chipId: number, muted: boolean): void {
+    if (this._player) this.mod._libvgm_set_chip_muted(this._player, chipId, muted ? 1 : 0);
+  }
+
   /** Engage / disengage the selection-loop mode. While set, the renderer
    *  seeks back to `range.start` whenever the playhead crosses
    *  `range.end`. Pass null to revert to normal (file-loop or stop). */

@@ -30,6 +30,9 @@ interface TrackSection {
   id: string;
   heatmap: TrackRenderer;
   subTracks: TrackRenderer[];
+  /** vgm_chip_t for chip sections; null for the master section. Drives
+   *  the mute button + per-chip PCM lookup. */
+  chip: VgmChipId | null;
 }
 
 /** True for the pseudo-chip IDs we attribute waits, data blocks and stream
@@ -42,10 +45,15 @@ function isAudioChip(chip: VgmChipId): boolean {
       && chip !== VgmChip.NONE;
 }
 
-function buildSections(file: VgmFile, chips: VgmChipId[], pcm: RenderedPcm | null): TrackSection[] {
+function buildSections(
+  file: VgmFile, chips: VgmChipId[],
+  pcm: RenderedPcm | null,
+  perChipPcm: Map<VgmChipId, RenderedPcm>,
+): TrackSection[] {
   const sections: TrackSection[] = [];
   sections.push({
     id: 'master',
+    chip: null,
     heatmap: new HeatmapTrackRenderer({
       id: 'heatmap-all',
       name: 'All commands',
@@ -60,16 +68,17 @@ function buildSections(file: VgmFile, chips: VgmChipId[], pcm: RenderedPcm | nul
   for (const chip of chips) {
     const short = file.chipName(chip, true);
     const audio = isAudioChip(chip);
+    const chipPcm = perChipPcm.get(chip) ?? null;
     sections.push({
       id: `chip-${chip}`,
+      chip,
       heatmap: makeChipHeatmap(file, chip, short),
-      // Per-chip waveform/spectrogram would need libvgm chip-mute + re-
-      // render per chip. For now share the master PCM so the slots have
-      // something visible; they'll get distinct per-chip audio in a
-      // follow-up.
+      // Per-chip waveform/spectrogram use the dedicated single-chip PCM
+      // when the worker has produced it; otherwise show the rendering
+      // placeholder.
       subTracks: audio ? [
-        new WaveformTrackRenderer(`wave-${chip}`, `${short} wave`, pcm),
-        new SpectrogramTrackRenderer(`spec-${chip}`, `${short} spec`, pcm),
+        new WaveformTrackRenderer(`wave-${chip}`, `${short} wave`, chipPcm),
+        new SpectrogramTrackRenderer(`spec-${chip}`, `${short} spec`, chipPcm),
       ] : [],
     });
   }
@@ -96,13 +105,17 @@ export function Timeline() {
   const revision = useEditorStore((s) => s.revision);
   const loopSample = useEditorStore((s) => s.loopSample);
   const pcm = useEditorStore((s) => s.pcm);
+  const perChipPcm = useEditorStore((s) => s.perChipPcm);
+  const mutedChips = useEditorStore((s) => s.mutedChips);
+  const requestChipPcm = useEditorStore((s) => s.requestChipPcm);
+  const toggleChipMute = useEditorStore((s) => s.toggleChipMute);
   const playCursor = useEditorStore((s) => s.playCursor);
   const playing = useEditorStore((s) => s.playing);
 
   const sections = useMemo(() => {
     if (!file) return [] as TrackSection[];
-    return buildSections(file, usedChips, pcm);
-  }, [file, usedChips, pcm]);
+    return buildSections(file, usedChips, pcm, perChipPcm);
+  }, [file, usedChips, pcm, perChipPcm]);
 
   // Page-by-page auto-scroll: when the play cursor crosses the right
   // edge of the view (which happens continuously during playback), jump
@@ -145,9 +158,15 @@ export function Timeline() {
   // parent heatmap row — keeps the default view focused on the command
   // tracks and avoids any audio-render work until requested.
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const toggleExpanded = useCallback((id: string) => {
-    setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
-  }, []);
+  const toggleExpanded = useCallback((id: string, chip: VgmChipId | null) => {
+    setExpanded((prev) => {
+      const nowOpen = !prev[id];
+      // First time a chip section opens, kick off the per-chip PCM
+      // render so its waveform / spectrogram have data to draw.
+      if (nowOpen && chip !== null) requestChipPcm(chip);
+      return { ...prev, [id]: nowOpen };
+    });
+  }, [requestChipPcm]);
 
   const overlayRef = useRef<HTMLDivElement>(null);
   const [areaWidthCss, setAreaWidthCss] = useState(0);
@@ -325,7 +344,10 @@ export function Timeline() {
                   view={view}
                   expandable={section.subTracks.length > 0}
                   expanded={isExpanded}
-                  onToggleExpanded={() => toggleExpanded(section.id)}
+                  onToggleExpanded={() => toggleExpanded(section.id, section.chip)}
+                  muteable={section.chip !== null}
+                  muted={section.chip !== null && mutedChips.has(section.chip)}
+                  onToggleMute={section.chip !== null ? () => toggleChipMute(section.chip!) : undefined}
                   revision={revision}
                 />
                 {isExpanded && section.subTracks.map((t) => (

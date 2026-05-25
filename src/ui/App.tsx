@@ -33,6 +33,7 @@ export function App() {
   const setPlaying = useEditorStore((s) => s.setPlaying);
   const loopSample = useEditorStore((s) => s.loopSample);
   const revision = useEditorStore((s) => s.revision);
+  const mutedChips = useEditorStore((s) => s.mutedChips);
   const deleteSelection = useEditorStore((s) => s.deleteSelection);
   const undo = useEditorStore((s) => s.undo);
   const redo = useEditorStore((s) => s.redo);
@@ -100,6 +101,19 @@ export function App() {
   useEffect(() => {
     audio?.setLoop(loopSample);
   }, [audio, loopSample]);
+
+  // Apply every chip's mute state when the renderer (re)builds or the
+  // mute set changes. libvgm's mute is sticky across the player's
+  // lifetime, so a fresh renderer needs to be told about every mute;
+  // the chips not in the set get an explicit "unmute" so they don't
+  // inherit stale state from a previous renderer.
+  useEffect(() => {
+    const file = useEditorStore.getState().file;
+    if (!audio || !file) return;
+    for (const chip of file.usedChips()) {
+      audio.setChipMuted(chip, mutedChips.has(chip));
+    }
+  }, [audio, mutedChips]);
 
   // Window-level keyboard handler:
   //   - Space              → play / pause

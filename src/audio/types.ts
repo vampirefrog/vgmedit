@@ -49,6 +49,10 @@ export interface AudioRenderer {
    *  playback is in flight. */
   setLoop(sample: number | null): void;
 
+  /** Mute / unmute a chip (by vgm_chip_t id) on the live player. Takes
+   *  effect immediately. */
+  setChipMuted(chipId: number, muted: boolean): void;
+
   /** Subscribe to playhead movement. Returns an unsubscribe fn. */
   onSampleAdvance(listener: SampleAdvanceListener): () => void;
 

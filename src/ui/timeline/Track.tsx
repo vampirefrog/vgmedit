@@ -22,12 +22,21 @@ export interface TrackProps {
   expandable?: boolean;
   expanded?: boolean;
   onToggleExpanded?: () => void;
+  /** When set, the label shows a mute toggle reflecting `muted`. */
+  muteable?: boolean;
+  muted?: boolean;
+  onToggleMute?: () => void;
   /** Bumped by the store on every edit; pass through so canvases redraw
    *  even when the renderer instance is stable. */
   revision?: number;
 }
 
-export function Track({ renderer, view, meta, expandable, expanded, onToggleExpanded, revision }: TrackProps) {
+export function Track({
+  renderer, view, meta,
+  expandable, expanded, onToggleExpanded,
+  muteable, muted, onToggleMute,
+  revision,
+}: TrackProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [widthCss, setWidthCss] = useState(0);
@@ -91,6 +100,25 @@ export function Track({ renderer, view, meta, expandable, expanded, onToggleExpa
           {renderer.name}
         </span>
         {meta && <span className="meta">{meta}</span>}
+        {muteable && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onToggleMute?.(); }}
+            title={muted ? 'unmute chip' : 'mute chip'}
+            style={{
+              alignSelf: 'flex-start',
+              marginTop: 2,
+              padding: '0 4px',
+              fontSize: 10,
+              background: muted ? 'var(--accent)' : 'var(--bg-3)',
+              color: muted ? '#000' : 'var(--text-dim)',
+              border: '1px solid var(--border)',
+              borderRadius: 3,
+              cursor: 'pointer',
+              lineHeight: '14px',
+            }}
+          >M</button>
+        )}
       </div>
       <div className="track-canvas-wrap" ref={wrapRef}>
         <canvas ref={canvasRef} className="track-canvas" />

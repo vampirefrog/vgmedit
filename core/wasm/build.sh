@@ -106,6 +106,7 @@ EXPORTS=(
   _vgm_offsetof_header_chip_clocks
   _libvgm_open _libvgm_close _libvgm_render_s16
   _libvgm_seek_sample _libvgm_current_sample _libvgm_total_samples
+  _libvgm_chip_devid _libvgm_set_chip_muted _libvgm_set_all_chips_muted
 )
 EXPORT_LIST=$(IFS=,; echo "${EXPORTS[*]}")
 

@@ -131,3 +131,108 @@ uint64_t libvgm_total_samples(const libvgm_player_t *p) {
     if (!engine) return 0;
     return engine->Tick2Sample(engine->GetTotalPlayTicks(1));
 }
+
+/* vgm_chip_t -> libvgm DEV_ID. Hardcoded mapping; matches the chip enum
+ * in core/include/vgmcore.h (VGM_CHIP_*) but only for chip types that
+ * libvgm actually emulates. RF5C68 and RF5C164 share DEVID_RF5C68 in
+ * libvgm — we accept the limitation that muting one mutes both. */
+uint8_t libvgm_chip_devid(uint8_t chip) {
+    switch (chip) {
+        case 1:  return 0x00;  // SN76489    -> DEVID_SN76496
+        case 2:  return 0x01;  // YM2413
+        case 3:  return 0x02;  // YM2612
+        case 4:  return 0x03;  // YM2151
+        case 5:  return 0x04;  // SegaPCM
+        case 6:  return 0x05;  // RF5C68
+        case 7:  return 0x06;  // YM2203
+        case 8:  return 0x07;  // YM2608
+        case 9:  return 0x08;  // YM2610
+        case 10: return 0x09;  // YM3812
+        case 11: return 0x0A;  // YM3526
+        case 12: return 0x0B;  // Y8950
+        case 13: return 0x0C;  // YMF262
+        case 14: return 0x0D;  // YMF278B
+        case 15: return 0x0E;  // YMF271
+        case 16: return 0x0F;  // YMZ280B
+        case 17: return 0x05;  // RF5C164 (shares DEVID with RF5C68)
+        case 18: return 0x11;  // PWM
+        case 19: return 0x12;  // AY8910
+        case 20: return 0x13;  // GameBoy DMG
+        case 21: return 0x14;  // NES APU
+        case 22: return 0x15;  // MultiPCM (DEVID_YMW258)
+        case 23: return 0x16;  // uPD7759
+        case 24: return 0x17;  // OKIM6258 (DEVID_MSM6258)
+        case 25: return 0x18;  // OKIM6295 (DEVID_MSM6295)
+        case 26: return 0x19;  // K051649
+        case 27: return 0x1A;  // K054539
+        case 28: return 0x1B;  // HuC6280 (DEVID_C6280)
+        case 29: return 0x1C;  // C140
+        case 30: return 0x1D;  // K053260
+        case 31: return 0x1E;  // POKEY
+        case 32: return 0x1F;  // QSound
+        case 33: return 0x20;  // SCSP
+        case 34: return 0x21;  // WonderSwan (DEVID_WSWAN)
+        case 35: return 0x22;  // VSU
+        case 36: return 0x23;  // SAA1099
+        case 37: return 0x24;  // ES5503
+        case 38: return 0x25;  // ES5506
+        case 39: return 0x26;  // X1-010
+        case 40: return 0x27;  // C352
+        case 41: return 0x28;  // GA20
+        default: return 0xFF;  // unmapped (pseudo chip, or unknown)
+    }
+}
+
+/* Apply muteOpts to every device whose libvgm type matches `wantedType`.
+ * Iterates the player's enumerated device list (which knows the actual
+ * instance numbers for dual-chip mode) rather than guessing instance IDs. */
+static int apply_mute_for_type(libvgm_player_t *p, uint8_t wantedType, bool muted) {
+    PlayerBase *engine = p->player.GetPlayer();
+    if (!engine) return 1;
+
+    std::vector<PLR_DEV_INFO> devList;
+    if (engine->GetSongDeviceInfo(devList) != 0x00) return 1;
+
+    PLR_MUTE_OPTS opts;
+    opts.disable = muted ? 0xFF : 0x00;
+    opts.chnMute[0] = 0;
+    opts.chnMute[1] = 0;
+
+    int hit = 0;
+    for (size_t i = 0; i < devList.size(); ++i) {
+        // Skip linked devices — only mute the main device of each chip
+        // (its linked AYs etc. get muted alongside automatically).
+        if (devList[i].parentIdx != (UINT32)-1) continue;
+        if ((uint8_t)devList[i].type != wantedType) continue;
+        engine->SetDeviceMuting(devList[i].id, opts);
+        ++hit;
+    }
+    return hit > 0 ? 0 : 2;
+}
+
+int libvgm_set_chip_muted(libvgm_player_t *p, uint8_t our_chip_id, int muted) {
+    if (!p) return -1;
+    uint8_t devid = libvgm_chip_devid(our_chip_id);
+    if (devid == 0xFF) return -2;  // no libvgm equivalent
+    return apply_mute_for_type(p, devid, muted != 0);
+}
+
+int libvgm_set_all_chips_muted(libvgm_player_t *p, int muted) {
+    if (!p) return -1;
+    PlayerBase *engine = p->player.GetPlayer();
+    if (!engine) return -1;
+
+    std::vector<PLR_DEV_INFO> devList;
+    if (engine->GetSongDeviceInfo(devList) != 0x00) return -1;
+
+    PLR_MUTE_OPTS opts;
+    opts.disable = muted ? 0xFF : 0x00;
+    opts.chnMute[0] = 0;
+    opts.chnMute[1] = 0;
+
+    for (size_t i = 0; i < devList.size(); ++i) {
+        if (devList[i].parentIdx != (UINT32)-1) continue;
+        engine->SetDeviceMuting(devList[i].id, opts);
+    }
+    return 0;
+}

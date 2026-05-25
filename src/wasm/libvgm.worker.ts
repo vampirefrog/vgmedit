@@ -19,13 +19,17 @@ interface RenderRequest {
   id: number;
   bytes: Uint8Array;
   sampleRate: number;
+  /** Optional vgm_chip_t to isolate: every other chip is muted before
+   *  rendering so the resulting PCM contains only this chip's audio.
+   *  Used by the per-chip waveform / spectrogram visualisations. */
+  isolateChip?: number;
 }
 
 const CHUNK_FRAMES = 4096;
 let modPromise: ReturnType<typeof createVgmCore> | null = null;
 
 self.onmessage = async (e: MessageEvent<RenderRequest>) => {
-  const { id, bytes, sampleRate } = e.data;
+  const { id, bytes, sampleRate, isolateChip } = e.data;
   try {
     if (!modPromise) modPromise = createVgmCore();
     const mod = await modPromise;
@@ -37,6 +41,13 @@ self.onmessage = async (e: MessageEvent<RenderRequest>) => {
     if (!player) throw new Error('libvgm_open failed');
 
     try {
+      if (isolateChip !== undefined) {
+        // Mute everything, then un-mute the target chip — gives us its
+        // contribution only.
+        mod._libvgm_set_all_chips_muted(player, 1);
+        mod._libvgm_set_chip_muted(player, isolateChip, 0);
+      }
+
       const total = Number(mod._libvgm_total_samples(player));
       if (total <= 0) throw new Error('libvgm reports zero total samples');
 

@@ -62,7 +62,11 @@ function getWorker(): Worker {
   return worker;
 }
 
-export function renderVgmToPcm(bytes: Uint8Array, sampleRate: number): Promise<RenderedPcm> {
+export function renderVgmToPcm(
+  bytes: Uint8Array,
+  sampleRate: number,
+  isolateChip?: number,
+): Promise<RenderedPcm> {
   const id = nextId++;
   const w = getWorker();
   return new Promise<RenderedPcm>((resolve, reject) => {
@@ -71,6 +75,6 @@ export function renderVgmToPcm(bytes: Uint8Array, sampleRate: number): Promise<R
     // don't want to risk a detached buffer if we transferred them.
     const owned = new Uint8Array(bytes.length);
     owned.set(bytes);
-    w.postMessage({ id, bytes: owned, sampleRate }, [owned.buffer]);
+    w.postMessage({ id, bytes: owned, sampleRate, isolateChip }, [owned.buffer]);
   });
 }

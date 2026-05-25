@@ -154,6 +154,10 @@ export class WorkletVgmAudioRenderer implements AudioRenderer {
     this.node?.port.postMessage({ type: 'setSelectionLoop', range });
   }
 
+  setChipMuted(chipId: number, muted: boolean): void {
+    this.node?.port.postMessage({ type: 'setChipMuted', chipId, muted });
+  }
+
   invalidate(_fromSample = 0): void { this.pause(); }
 
   onSampleAdvance(listener: SampleAdvanceListener): () => void {

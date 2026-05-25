@@ -84,6 +84,10 @@ export class StubAudioRenderer implements AudioRenderer {
     // exists only to drive the cursor before libvgm is wired up.
   }
 
+  setChipMuted(_chipId: number, _muted: boolean): void {
+    // Stub renderer has no chips to mute.
+  }
+
   onSampleAdvance(listener: SampleAdvanceListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);

@@ -88,6 +88,8 @@ class VgmRealtimeProcessor extends AudioWorkletProcessor {
       this.loopSample = m.sample;
     } else if (m.type === 'setSelectionLoop') {
       this.selectionLoop = m.range ?? null;
+    } else if (m.type === 'setChipMuted') {
+      if (this.player) mod._libvgm_set_chip_muted(this.player, m.chipId | 0, m.muted ? 1 : 0);
     } else if (m.type === 'pause') {
       this.paused = true;
     } else if (m.type === 'resume') {

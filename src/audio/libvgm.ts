@@ -145,6 +145,11 @@ export class LibVgmAudioRenderer implements AudioRenderer {
     return this._loopSample + within;
   }
 
+  setChipMuted(_chipId: number, _muted: boolean): void {
+    // Pre-rendered PCM playback can't change chip mixing after the fact.
+    // The realtime renderer is the supported path for muting.
+  }
+
   setLoop(sample: number | null): void {
     this._loopSample = sample;
     // Propagate to the running source so the change takes effect at the

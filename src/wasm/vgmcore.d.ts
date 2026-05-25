@@ -61,6 +61,10 @@ export interface VgmCoreModule {
   _libvgm_current_sample(player: number): bigint;
   _libvgm_total_samples(player: number): bigint;
 
+  _libvgm_chip_devid(ourChipId: number): number;
+  _libvgm_set_chip_muted(player: number, ourChipId: number, muted: number): number;
+  _libvgm_set_all_chips_muted(player: number, muted: number): number;
+
   _vgm_sizeof_command_entry(): number;
   _vgm_sizeof_header(): number;
   _vgm_chip_count(): number;

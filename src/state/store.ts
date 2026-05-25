@@ -38,6 +38,14 @@ export interface EditorState {
   pcm: RenderedPcm | null;
   /** True while the libvgm-backed pre-render is running. */
   pcmRendering: boolean;
+  /** Per-chip rendered PCM, keyed by VgmChipId. Lazily populated when a
+   *  chip section is expanded for the first time. */
+  perChipPcm: Map<VgmChipId, RenderedPcm>;
+  /** Chips currently being rendered (avoids duplicate kick-offs). */
+  perChipRendering: Set<VgmChipId>;
+  /** Chips currently muted in live playback. The audio renderer is
+   *  notified by an App-level effect. */
+  mutedChips: Set<VgmChipId>;
   /** Bumped whenever the loaded file mutates. Components that read derived
    *  data (heatmap, formatted commands, args) subscribe to this to know
    *  when to re-read from the C side. */
@@ -102,6 +110,13 @@ export interface EditorState {
   /** Returns a fresh VGM byte stream of the current edited file. */
   serializeFile: () => Uint8Array | null;
 
+  /** Kick off a per-chip PCM render in the background if not already
+   *  rendering or cached. Idempotent. */
+  requestChipPcm: (chip: VgmChipId) => void;
+
+  /** Toggle the mute state of a chip; affects live playback. */
+  toggleChipMute: (chip: VgmChipId) => void;
+
   // Undo / redo. Pure serialize-and-reopen — every successful edit
   // pushes a snapshot of the pre-edit file onto undoStack; undo pops
   // it, snapshots the current state onto redoStack, and re-opens the
@@ -132,7 +147,10 @@ async function kickOffPcmRender(
   bytes: Uint8Array,
 ): Promise<void> {
   const token = ++pcmRenderToken;
-  set({ pcm: null, pcmRendering: true });
+  // Wipe any per-chip cache too — chip-specific PCMs are derived from
+  // the same file bytes and become stale after an edit. They'll be
+  // re-rendered lazily on next section-expand.
+  set({ pcm: null, pcmRendering: true, perChipPcm: new Map(), perChipRendering: new Set() });
   try {
     const pcm = await renderVgmToPcm(bytes, VGM_SAMPLE_RATE);
     if (token !== pcmRenderToken) return;  // stale — newer render in flight
@@ -175,6 +193,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   loopIndex: null,
   pcm: null,
   pcmRendering: false,
+  perChipPcm: new Map(),
+  perChipRendering: new Set(),
+  mutedChips: new Set(),
   revision: 0,
   canUndo: false,
   canRedo: false,
@@ -405,6 +426,35 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const f = get().file;
     return f ? f.serialize() : null;
   },
+
+  requestChipPcm: (chip) => {
+    const s = get();
+    if (!s.file) return;
+    if (s.perChipPcm.has(chip) || s.perChipRendering.has(chip)) return;
+    const rendering = new Set(s.perChipRendering); rendering.add(chip);
+    set({ perChipRendering: rendering });
+    const bytes = s.file.serialize();
+    void renderVgmToPcm(bytes, VGM_SAMPLE_RATE, chip).then((pcm) => {
+      // Drop if a fresh load / edit happened while we were rendering.
+      if (useEditorStore.getState().file !== s.file) return;
+      const next = new Map(useEditorStore.getState().perChipPcm);
+      next.set(chip, pcm);
+      const stillRendering = new Set(useEditorStore.getState().perChipRendering);
+      stillRendering.delete(chip);
+      useEditorStore.setState({ perChipPcm: next, perChipRendering: stillRendering });
+    }).catch(() => {
+      const stillRendering = new Set(useEditorStore.getState().perChipRendering);
+      stillRendering.delete(chip);
+      useEditorStore.setState({ perChipRendering: stillRendering });
+    });
+  },
+
+  toggleChipMute: (chip) => set((s) => {
+    const next = new Set(s.mutedChips);
+    if (next.has(chip)) next.delete(chip);
+    else next.add(chip);
+    return { mutedChips: next };
+  }),
 
   undo: async () => {
     const file = get().file;

@@ -48,6 +48,21 @@ int libvgm_seek_sample(libvgm_player_t *p, uint64_t sample_pos);
 uint64_t libvgm_current_sample(const libvgm_player_t *p);
 uint64_t libvgm_total_samples(const libvgm_player_t *p);
 
+/* Map our vgm_chip_t enum value to the libvgm DEV_ID it corresponds to.
+ * Returns 0xFF when the chip has no libvgm equivalent (e.g. our pseudo
+ * chips: CONTROL, DATA_BLOCK, DAC_STREAM). */
+uint8_t libvgm_chip_devid(uint8_t our_chip_id);
+
+/* Mute / unmute all instances of a chip type. `our_chip_id` is a
+ * vgm_chip_t value (1=SN76489, 3=YM2612, …); we translate to the
+ * libvgm DEV_ID internally. Returns 0 on success, non-zero on failure
+ * (chip not present in the file, mapping unknown, …). */
+int libvgm_set_chip_muted(libvgm_player_t *p, uint8_t our_chip_id, int muted);
+
+/* Bulk-mute every chip in the file. Used by per-chip waveform rendering
+ * to mute all chips and then selectively un-mute one. */
+int libvgm_set_all_chips_muted(libvgm_player_t *p, int muted);
+
 #ifdef __cplusplus
 }
 #endif
