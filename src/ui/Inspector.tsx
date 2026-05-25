@@ -36,6 +36,7 @@ export function Inspector() {
   const setLoopIndex = useEditorStore((s) => s.setLoopIndex);
   const setLoopAtCursor = useEditorStore((s) => s.setLoopAtCursor);
   const deleteSelection = useEditorStore((s) => s.deleteSelection);
+  const trimAndSetLoop = useEditorStore((s) => s.trimAndSetLoop);
 
   const [cmd, setCmd] = useState<VgmCommand | null>(null);
   const [formatted, setFormatted] = useState<string>('');
@@ -162,6 +163,11 @@ export function Inspector() {
           onClick={() => setEditStatus(describeRc('delete selection', deleteSelection()))}
           title="Delete the selected sample range (Del key). Wait commands crossing the boundary are trimmed."
         >delete selection (Del)</button>
+        <button
+          disabled={!selection}
+          onClick={() => setEditStatus(describeRc('trim + set loop', trimAndSetLoop()))}
+          title="Cut everything past the selection end, set the loop point to the selection start. One undo step."
+        >trim + set loop</button>
       </div>
 
       <h3 style={{ marginTop: 18 }}>loop</h3>

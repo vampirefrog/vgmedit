@@ -122,6 +122,24 @@ export function Timeline() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playCursor, playing]);
 
+  // When playback stops, snap the view back to where the edit cursor is —
+  // the auto-scroll above pages the view forward to follow audio, and
+  // without this the view would stay parked at the last play-cursor
+  // position, leaving the user looking at audio they're no longer at.
+  const wasPlayingRef = useRef(false);
+  useEffect(() => {
+    if (wasPlayingRef.current && !playing) {
+      const span = view.endSample - view.startSample;
+      if (span > 0 && (cursor < view.startSample || cursor >= view.endSample)) {
+        // Centre on edit cursor.
+        const start = Math.max(0, cursor - Math.floor(span / 2));
+        setView({ startSample: start, endSample: start + span });
+      }
+    }
+    wasPlayingRef.current = playing;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing]);
+
   // Per-section expansion state. Sub-tracks (waveform + spectrogram) start
   // hidden and are only mounted when the user clicks the chevron on their
   // parent heatmap row — keeps the default view focused on the command

@@ -93,6 +93,15 @@ export interface EditorState {
    *  snaps to the (now-shortened) selection start; selection clears. */
   deleteSelection: () => number;
 
+  /** "Trim to selection and set loop point": deletes everything past the
+   *  selection's end (boundary wait trimmed), then sets the loop point
+   *  to the command at the selection's start. Useful for converting a
+   *  user-found loop into a real VGM loop. Single undo step. */
+  trimAndSetLoop: () => number;
+
+  /** Returns a fresh VGM byte stream of the current edited file. */
+  serializeFile: () => Uint8Array | null;
+
   // Undo / redo. Pure serialize-and-reopen — every successful edit
   // pushes a snapshot of the pre-edit file onto undoStack; undo pops
   // it, snapshots the current state onto redoStack, and re-opens the
@@ -360,6 +369,41 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       });
     }
     return rc;
+  },
+
+  trimAndSetLoop: () => {
+    const { file, selection } = get();
+    if (!file || !selection) return -4;
+    const snap = file.serialize();
+    // 1. Trim everything past selection.end. The boundary wait gets
+    //    proportionally shortened by vgm_delete_range.
+    let rc = file.deleteRange(selection.end, file.header.totalSamples);
+    if (rc !== 0) return rc;
+    // 2. Find the command at selection.start (post-delete sample numbers
+    //    haven't shifted because we only cut from the end) and mark it
+    //    as the loop point.
+    const loopIdx = file.findCommandIndexAtSample(selection.start);
+    if (loopIdx >= 0) {
+      rc = file.setLoopIndex(loopIdx);
+      if (rc !== 0) return rc;
+    }
+    // Single combined undo step.
+    undoStack.push(snap);
+    if (undoStack.length > MAX_HISTORY) undoStack.shift();
+    redoStack.length = 0;
+    afterEdit(set, file);
+    set({
+      cursor: selection.start,
+      playCursor: selection.start,
+      selection: null,
+      selectedCommandIndex: null,
+    });
+    return 0;
+  },
+
+  serializeFile: () => {
+    const f = get().file;
+    return f ? f.serialize() : null;
   },
 
   undo: async () => {

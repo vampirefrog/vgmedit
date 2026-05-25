@@ -28,6 +28,8 @@ export function Toolbar({ audio }: ToolbarProps) {
   const redo = useEditorStore((s) => s.redo);
   const pcmRendering = useEditorStore((s) => s.pcmRendering);
   const pcm = useEditorStore((s) => s.pcm);
+  const serializeFile = useEditorStore((s) => s.serializeFile);
+  const fileNameStored = useEditorStore((s) => s.fileName);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -71,6 +73,11 @@ export function Toolbar({ audio }: ToolbarProps) {
       {loadError && <span style={{ color: '#ff6b6b' }}>error: {loadError}</span>}
       <button disabled={!canUndo} onClick={() => void undo()} title="Undo (Ctrl+Z)">↶</button>
       <button disabled={!canRedo} onClick={() => void redo()} title="Redo (Ctrl+Y or Ctrl+Shift+Z)">↷</button>
+      <button
+        disabled={!fileNameStored}
+        onClick={() => downloadVgm(serializeFile(), fileNameStored)}
+        title="Download the edited VGM file"
+      >download</button>
       <span className="spacer" />
       {pcmRendering && (
         <span style={{ color: 'var(--accent-2)', fontSize: 11 }}>rendering audio…</span>
@@ -100,4 +107,22 @@ async function gunzip(bytes: Uint8Array): Promise<Uint8Array> {
   const stream = new Blob([bytes as BlobPart]).stream().pipeThrough(new DecompressionStream('gzip'));
   const buf = await new Response(stream).arrayBuffer();
   return new Uint8Array(buf);
+}
+
+function downloadVgm(bytes: Uint8Array | null, sourceName: string | null): void {
+  if (!bytes) return;
+  // If the original was .vgz, swap to .vgm since serialize emits raw.
+  const base = (sourceName ?? 'edited.vgm').replace(/\.vgz$/i, '.vgm');
+  const outName = base.toLowerCase().endsWith('.vgm') ? base : `${base}.vgm`;
+  const blob = new Blob([bytes as BlobPart], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = outName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Free the object URL on the next tick so the browser has time to start
+  // the download.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
