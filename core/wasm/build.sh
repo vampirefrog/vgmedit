@@ -154,7 +154,25 @@ em++ "${OBJS[@]}" \
   -sEXPORTED_RUNTIME_METHODS=UTF8ToString \
   -o "$WORKLET_TMP"
 
-cat "$WORKLET_TMP" "$CORE_DIR/wasm/worklet-processor.js" \
-  > "$PUBLIC_DIR/vgm-realtime-worklet.js"
+# AudioWorkletGlobalScope doesn't define `self` (Emscripten's `worker`
+# environment assumes it does) and doesn't have `setTimeout` /
+# `queueMicrotask` everywhere. Prepend a tiny shim before the Emscripten
+# output so the runtime initialises cleanly.
+{
+  cat <<'SHIM'
+// --- AudioWorkletGlobalScope polyfill (prepended by build.sh) ---
+var self = globalThis;
+var location = location || { href: '' };
+if (typeof setTimeout === 'undefined') {
+  // AudioWorklet doesn't expose timers. Emscripten's runtime mostly
+  // uses them for async startup paths we don't hit; an immediate
+  // execution is fine as a stand-in for the few cases that fire.
+  var setTimeout = function (fn) { try { fn(); } catch (_) {} return 0; };
+  var clearTimeout = function () {};
+}
+SHIM
+  cat "$WORKLET_TMP"
+  cat "$CORE_DIR/wasm/worklet-processor.js"
+} > "$PUBLIC_DIR/vgm-realtime-worklet.js"
 rm "$WORKLET_TMP"
 echo "[build] $PUBLIC_DIR/vgm-realtime-worklet.js"
