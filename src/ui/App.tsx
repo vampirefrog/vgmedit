@@ -30,25 +30,45 @@ export function App() {
   const setPlaying = useEditorStore((s) => s.setPlaying);
   const revision = useEditorStore((s) => s.revision);
   const deleteSelection = useEditorStore((s) => s.deleteSelection);
+  const undo = useEditorStore((s) => s.undo);
+  const redo = useEditorStore((s) => s.redo);
 
   const [audio, setAudio] = useState<AudioRenderer | null>(null);
   const [bottomHeight, setBottomHeight] = useState(320);
 
-  // Delete key removes the current selection (boundary waits trimmed).
-  // Ignored when an editable element has focus so it doesn't fight with
-  // the inspector form fields.
+  // Window-level keyboard handler:
+  //   - Delete / Backspace → delete the current selection (waits trimmed)
+  //   - Ctrl/Cmd+Z         → undo
+  //   - Ctrl/Cmd+Y or
+  //     Ctrl/Cmd+Shift+Z   → redo
+  // Editable elements (inspector text inputs) get a free pass so the
+  // shortcuts don't fight with built-in text editing.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
       const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-      const rc = deleteSelection();
-      // -4 just means "no selection" — silent no-op for an unmodified Del press.
-      if (rc === 0) e.preventDefault();
+      const editable = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+      if (editable) return;
+
+      const mod = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+      if (mod && key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        void undo();
+        return;
+      }
+      if (mod && (key === 'y' || (key === 'z' && e.shiftKey))) {
+        e.preventDefault();
+        void redo();
+        return;
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        const rc = deleteSelection();
+        if (rc === 0) e.preventDefault();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [deleteSelection]);
+  }, [deleteSelection, undo, redo]);
 
   // Any edit invalidates the renderer state so the next playback / seek
   // re-renders from scratch. (Per spec: edits force full re-render until we

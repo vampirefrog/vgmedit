@@ -22,6 +22,10 @@ export function Toolbar({ audio }: ToolbarProps) {
   const playing = useEditorStore((s) => s.playing);
   const setPlaying = useEditorStore((s) => s.setPlaying);
   const totalSamples = useEditorStore((s) => s.totalSamples);
+  const canUndo = useEditorStore((s) => s.canUndo);
+  const canRedo = useEditorStore((s) => s.canRedo);
+  const undo = useEditorStore((s) => s.undo);
+  const redo = useEditorStore((s) => s.redo);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -60,6 +64,8 @@ export function Toolbar({ audio }: ToolbarProps) {
       />
       {fileName && <span style={{ color: 'var(--text-dim)' }}>{fileName}</span>}
       {loadError && <span style={{ color: '#ff6b6b' }}>error: {loadError}</span>}
+      <button disabled={!canUndo} onClick={() => void undo()} title="Undo (Ctrl+Z)">↶</button>
+      <button disabled={!canRedo} onClick={() => void redo()} title="Redo (Ctrl+Y or Ctrl+Shift+Z)">↷</button>
       <span className="spacer" />
       <button onClick={togglePlay} disabled={!audio}>
         {playing ? '❚❚' : '▶'}

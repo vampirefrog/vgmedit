@@ -75,6 +75,30 @@ export interface EditorState {
   /** Delete the current selection. Trims boundary-crossing waits. Cursor
    *  snaps to the (now-shortened) selection start; selection clears. */
   deleteSelection: () => number;
+
+  // Undo / redo. Pure serialize-and-reopen — every successful edit
+  // pushes a snapshot of the pre-edit file onto undoStack; undo pops
+  // it, snapshots the current state onto redoStack, and re-opens the
+  // popped bytes. History clears on file load. Resolves true if a
+  // step happened, false if there was nothing to do.
+  canUndo: boolean;
+  canRedo: boolean;
+  undo: () => Promise<boolean>;
+  redo: () => Promise<boolean>;
+}
+
+// Undo/redo storage. Snapshots are full serialized VGM byte streams; the
+// undo machinery re-opens them through VgmFile to restore. Living outside
+// the Zustand state keeps the (potentially large) snapshot arrays out of
+// React's render path — only the can-undo/can-redo booleans go through
+// the store and trigger UI updates.
+const MAX_HISTORY = 50;
+const undoStack: Uint8Array[] = [];
+const redoStack: Uint8Array[] = [];
+
+function clearHistory(): void {
+  undoStack.length = 0;
+  redoStack.length = 0;
 }
 
 function clampView(view: TimelineView, total: number): TimelineView {
@@ -102,6 +126,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   loopSample: null,
   loopIndex: null,
   revision: 0,
+  canUndo: false,
+  canRedo: false,
 
   view: { startSample: 0, endSample: 1 },
   cursor: 0,
@@ -112,7 +138,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   loadFile: async (data, name) => {
     const prev = get().file;
     if (prev) prev.close();
-    set({ file: null, fileName: name, loadError: null, selectedCommandIndex: null });
+    clearHistory();
+    set({ file: null, fileName: name, loadError: null, selectedCommandIndex: null, canUndo: false, canRedo: false });
     try {
       const file = await VgmFile.open(data);
       const total = file.header.totalSamples || 1;
@@ -187,24 +214,39 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   insertCommand: (beforeIndex, opcode, args) => {
     const file = get().file;
     if (!file) return -1;
+    const snap = file.serialize();
     const rc = file.insertCommand(beforeIndex, opcode, args);
-    if (rc === 0) afterEdit(set, file);
+    if (rc === 0) {
+      undoStack.push(snap);
+      if (undoStack.length > MAX_HISTORY) undoStack.shift();
+      redoStack.length = 0;
+      afterEdit(set, file);
+    }
     return rc;
   },
   updateCommand: (index, opcode, args) => {
     const file = get().file;
     if (!file) return -1;
+    const snap = file.serialize();
     const rc = file.updateCommand(index, opcode, args);
-    if (rc === 0) afterEdit(set, file);
+    if (rc === 0) {
+      undoStack.push(snap);
+      if (undoStack.length > MAX_HISTORY) undoStack.shift();
+      redoStack.length = 0;
+      afterEdit(set, file);
+    }
     return rc;
   },
   deleteCommand: (index) => {
     const file = get().file;
     if (!file) return -1;
+    const snap = file.serialize();
     const rc = file.deleteCommand(index);
     if (rc === 0) {
+      undoStack.push(snap);
+      if (undoStack.length > MAX_HISTORY) undoStack.shift();
+      redoStack.length = 0;
       afterEdit(set, file);
-      // Keep selectedCommandIndex valid — drop or shift it.
       const sel = get().selectedCommandIndex;
       if (sel !== null) {
         if (sel === index) set({ selectedCommandIndex: null });
@@ -217,8 +259,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setLoopIndex: (index) => {
     const file = get().file;
     if (!file) return -1;
+    const snap = file.serialize();
     const rc = file.setLoopIndex(index);
-    if (rc === 0) afterEdit(set, file);
+    if (rc === 0) {
+      undoStack.push(snap);
+      if (undoStack.length > MAX_HISTORY) undoStack.shift();
+      redoStack.length = 0;
+      afterEdit(set, file);
+    }
     return rc;
   },
 
@@ -227,19 +275,27 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (!file) return -1;
     const idx = file.findCommandIndexAtSample(get().cursor);
     if (idx < 0) return -4;
+    const snap = file.serialize();
     const rc = file.setLoopIndex(idx);
-    if (rc === 0) afterEdit(set, file);
+    if (rc === 0) {
+      undoStack.push(snap);
+      if (undoStack.length > MAX_HISTORY) undoStack.shift();
+      redoStack.length = 0;
+      afterEdit(set, file);
+    }
     return rc;
   },
 
   deleteSelection: () => {
     const { file, selection } = get();
     if (!file || !selection) return -4;
+    const snap = file.serialize();
     const rc = file.deleteRange(selection.start, selection.end);
     if (rc === 0) {
+      undoStack.push(snap);
+      if (undoStack.length > MAX_HISTORY) undoStack.shift();
+      redoStack.length = 0;
       afterEdit(set, file);
-      // Snap cursor to where the cut joined and clear the (now-stale)
-      // selection. Selected command may have moved/gone — drop it too.
       set({
         cursor: selection.start,
         selection: null,
@@ -248,9 +304,32 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
     return rc;
   },
+
+  undo: async () => {
+    const file = get().file;
+    if (!file || undoStack.length === 0) return false;
+    const current = file.serialize();
+    const target = undoStack.pop()!;
+    redoStack.push(current);
+    if (redoStack.length > MAX_HISTORY) redoStack.shift();
+    await restoreFromBytes(set, get, target);
+    return true;
+  },
+
+  redo: async () => {
+    const file = get().file;
+    if (!file || redoStack.length === 0) return false;
+    const current = file.serialize();
+    const target = redoStack.pop()!;
+    undoStack.push(current);
+    if (undoStack.length > MAX_HISTORY) undoStack.shift();
+    await restoreFromBytes(set, get, target);
+    return true;
+  },
 }));
 
-/** Refresh store state derived from the (just-mutated) VgmFile. */
+/** Refresh store state derived from the (just-mutated) VgmFile. Also
+ *  refreshes canUndo/canRedo since this is called after every edit. */
 function afterEdit(set: (partial: Partial<EditorState>) => void, file: VgmFile): void {
   const loopIdx = file.getLoopIndex();
   const loopSample = loopIdx === null ? null : file.getCommand(loopIdx).sampleTime;
@@ -261,5 +340,49 @@ function afterEdit(set: (partial: Partial<EditorState>) => void, file: VgmFile):
     loopIndex: loopIdx,
     loopSample,
     revision: useEditorStore.getState().revision + 1,
+    canUndo: undoStack.length > 0,
+    canRedo: redoStack.length > 0,
+  });
+}
+
+/** Replace the loaded file with one parsed from `bytes`. Used by undo/redo
+ *  to restore prior snapshots. Closes the previous VgmFile to release its
+ *  WASM allocation, then re-derives all file-dependent store state. */
+async function restoreFromBytes(
+  set: (partial: Partial<EditorState>) => void,
+  get: () => EditorState,
+  bytes: Uint8Array,
+): Promise<void> {
+  const old = get().file;
+  if (old) old.close();
+  const file = await VgmFile.open(bytes);
+  const total = file.header.totalSamples || 1;
+  const loopIdx = file.getLoopIndex();
+  const loopSample = loopIdx === null ? null : file.getCommand(loopIdx).sampleTime;
+  const view = get().view;
+  // Keep the view's span where possible; just clamp into the new file's
+  // bounds so undo/redo doesn't yank the camera around.
+  const span = Math.max(1, Math.floor(view.endSample - view.startSample));
+  let newView: TimelineView;
+  if (span >= total) {
+    newView = { startSample: 0, endSample: total };
+  } else {
+    const start = Math.max(0, Math.min(total - span, Math.floor(view.startSample)));
+    newView = { startSample: start, endSample: start + span };
+  }
+  set({
+    file,
+    totalSamples: total,
+    commandCount: file.commandCount,
+    usedChips: file.usedChips(),
+    loopIndex: loopIdx,
+    loopSample,
+    revision: get().revision + 1,
+    cursor: Math.max(0, Math.min(total, get().cursor)),
+    selection: null,
+    selectedCommandIndex: null,
+    view: newView,
+    canUndo: undoStack.length > 0,
+    canRedo: redoStack.length > 0,
   });
 }
