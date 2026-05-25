@@ -37,6 +37,10 @@ class VgmRealtimeProcessor extends AudioWorkletProcessor {
     /** Frames since last cursor message (throttling). */
     this.framesSinceCursor = 0;
     this.ended = false;
+    /** When true, process() outputs silence and skips render + cursor
+     *  emission. Toggled by the main-thread renderer on play/pause so
+     *  we don't keep rendering after disconnect (Firefox quirk). */
+    this.paused = true;
 
     this.port.onmessage = (e) => this.onMessage(e.data);
 
@@ -84,6 +88,11 @@ class VgmRealtimeProcessor extends AudioWorkletProcessor {
       this.loopSample = m.sample;
     } else if (m.type === 'setSelectionLoop') {
       this.selectionLoop = m.range ?? null;
+    } else if (m.type === 'pause') {
+      this.paused = true;
+    } else if (m.type === 'resume') {
+      this.paused = false;
+      this.framesSinceCursor = 0;
     } else if (m.type === 'close') {
       if (this.player) { mod._libvgm_close(this.player); this.player = 0; }
       if (this.scratchPtr) { mod._free(this.scratchPtr); this.scratchPtr = 0; this.scratchFrames = 0; }
@@ -106,9 +115,10 @@ class VgmRealtimeProcessor extends AudioWorkletProcessor {
     const N = left.length;
 
     // Output silence whenever we have no player (WASM still loading,
-    // file not yet loaded, or we've signalled end). Returning true keeps
-    // the processor alive for the next load.
-    if (!this.mod || !this.player || this.ended) {
+    // file not yet loaded, or we've signalled end), or whenever the
+    // main-thread renderer has told us to pause. Returning true keeps
+    // the processor alive for the next resume.
+    if (!this.mod || !this.player || this.ended || this.paused) {
       for (let i = 0; i < N; i++) { left[i] = 0; right[i] = 0; }
       return true;
     }

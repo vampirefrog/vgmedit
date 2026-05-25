@@ -99,6 +99,11 @@ export class WorkletVgmAudioRenderer implements AudioRenderer {
   private onProcessorMessage(e: MessageEvent): void {
     const m = e.data;
     if (m.type === 'cursor') {
+      // Defensive: at least in Firefox the worklet keeps emitting cursor
+      // messages for a moment after disconnect() (or the queued ones
+      // drain into here late). If we forwarded those, the CommandList /
+      // play-cursor display would keep marching forward despite paused.
+      if (!this._playing) return;
       this._currentSample = m.sample;
       for (const l of this.listeners) l(m.sample);
     } else if (m.type === 'ended') {
@@ -114,12 +119,19 @@ export class WorkletVgmAudioRenderer implements AudioRenderer {
     await this.ready;
     if (this.disposed) return;
     if (this.ctx.state === 'suspended') await this.ctx.resume();
+    // Tell the worklet to resume *before* connecting so the first
+    // process() call after connect produces audio rather than silence.
+    this.node?.port.postMessage({ type: 'resume' });
     this.node?.connect(this.ctx.destination);
     this.setPlaying(true);
   }
 
   pause(): void {
     if (!this._playing) return;
+    // Tell the worklet to stop rendering / cursor-reporting first; the
+    // disconnect alone isn't always enough (Firefox in particular keeps
+    // pumping process() briefly after a disconnect).
+    this.node?.port.postMessage({ type: 'pause' });
     if (this.node) {
       try { this.node.disconnect(); } catch { /* no-op */ }
     }
