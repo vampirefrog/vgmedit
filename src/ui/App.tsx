@@ -32,6 +32,7 @@ export function App() {
   const playing = useEditorStore((s) => s.playing);
   const setPlaying = useEditorStore((s) => s.setPlaying);
   const pcm = useEditorStore((s) => s.pcm);
+  const loopSample = useEditorStore((s) => s.loopSample);
   const deleteSelection = useEditorStore((s) => s.deleteSelection);
   const undo = useEditorStore((s) => s.undo);
   const redo = useEditorStore((s) => s.redo);
@@ -53,7 +54,11 @@ export function App() {
     const wasPlaying = audio?.playing ?? false;
     const initial = audio?.currentSample ?? cursor;
     audio?.dispose();
-    const next = new LibVgmAudioRenderer({ pcm, initialSample: initial });
+    const next = new LibVgmAudioRenderer({
+      pcm,
+      initialSample: initial,
+      loopSample: useEditorStore.getState().loopSample,
+    });
     // Live audio sample-advance drives the play cursor only — the edit
     // cursor stays put so the user's seek/click position is preserved
     // across playback.
@@ -82,6 +87,12 @@ export function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [audio, cursor]);
+
+  // Push loop-point changes to the running renderer so the next loop
+  // iteration honors the new wrap-back sample.
+  useEffect(() => {
+    audio?.setLoop(loopSample);
+  }, [audio, loopSample]);
 
   // Window-level keyboard handler:
   //   - Space              → play / pause

@@ -79,6 +79,11 @@ export class StubAudioRenderer implements AudioRenderer {
     // No buffered audio in the stub, nothing else to discard.
   }
 
+  setLoop(_sample: number | null): void {
+    // Stub doesn't model loop wrap-around — fine since this renderer
+    // exists only to drive the cursor before libvgm is wired up.
+  }
+
   onSampleAdvance(listener: SampleAdvanceListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);

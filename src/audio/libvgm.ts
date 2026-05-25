@@ -23,6 +23,9 @@ import type { AudioRenderer, PlayingChangeListener, SampleAdvanceListener } from
 export interface LibVgmAudioOptions {
   pcm: RenderedPcm;
   initialSample?: number;
+  /** When set, playback loops from `totalSamples` back to this sample
+   *  position. null disables looping (default). */
+  loopSample?: number | null;
 }
 
 export class LibVgmAudioRenderer implements AudioRenderer {
@@ -37,6 +40,8 @@ export class LibVgmAudioRenderer implements AudioRenderer {
   private _currentSample: number;
   private _ctxStartTime = 0;       // ctx.currentTime at most recent play()
   private _ctxStartSample = 0;     // _currentSample at most recent play()
+  /** When non-null, playback wraps from totalSamples back to this sample. */
+  private _loopSample: number | null = null;
   private rafId: number | null = null;
   private listeners = new Set<SampleAdvanceListener>();
   private playingListeners = new Set<PlayingChangeListener>();
@@ -52,6 +57,7 @@ export class LibVgmAudioRenderer implements AudioRenderer {
     this.sampleRate = opts.pcm.sampleRate;
     this.totalSamples = opts.pcm.frames;
     this._currentSample = opts.initialSample ?? 0;
+    this._loopSample = opts.loopSample ?? null;
   }
 
   get currentSample(): number { return this._currentSample; }
@@ -82,9 +88,18 @@ export class LibVgmAudioRenderer implements AudioRenderer {
     const src = ctx.createBufferSource();
     src.buffer = this._buffer!;
     src.connect(ctx.destination);
+    // Configure looping if a loop point is set. The browser handles the
+    // wrap-around inside AudioBuffer playback seamlessly; we mirror the
+    // same wrap-around in the play-cursor math below.
+    if (this._loopSample !== null && this._loopSample < this.totalSamples) {
+      src.loop = true;
+      src.loopStart = this._loopSample / this.sampleRate;
+      src.loopEnd = this.totalSamples / this.sampleRate;
+    }
     src.onended = () => {
-      // Either user-initiated stop or natural end-of-file; only the latter
-      // should drive the cursor to the end.
+      // Loop mode: this only fires on user stop or seek-induced disconnect,
+      // never naturally.
+      // No-loop mode: also fires at end-of-file; clamp cursor and stop.
       if (this._source === src) {
         if (this._currentSample < this.totalSamples) { this.setPlaying(false); return; }
         this._currentSample = this.totalSamples;
@@ -102,12 +117,47 @@ export class LibVgmAudioRenderer implements AudioRenderer {
     const tick = () => {
       if (!this._playing) return;
       const now = ctx.currentTime;
-      const advance = (now - this._ctxStartTime) * this.sampleRate;
-      this._currentSample = Math.min(this.totalSamples, this._ctxStartSample + advance);
+      const elapsed = (now - this._ctxStartTime) * this.sampleRate;
+      this._currentSample = this.elapsedToSample(elapsed);
       this.emit();
       this.rafId = requestAnimationFrame(tick);
     };
     this.rafId = requestAnimationFrame(tick);
+  }
+
+  /** Map "elapsed samples since play()" to a current sample position,
+   *  handling loop wrap-around. The first pass runs from _ctxStartSample
+   *  to totalSamples; if the loop is set, subsequent cycles run from
+   *  _loopSample to totalSamples and repeat. */
+  private elapsedToSample(elapsed: number): number {
+    const start = this._ctxStartSample;
+    if (this._loopSample === null) {
+      return Math.min(this.totalSamples, start + elapsed);
+    }
+    const firstPass = Math.max(0, this.totalSamples - start);
+    if (elapsed < firstPass) {
+      return start + elapsed;
+    }
+    const loopLen = this.totalSamples - this._loopSample;
+    if (loopLen <= 0) return this.totalSamples;
+    const past = elapsed - firstPass;
+    const within = past - Math.floor(past / loopLen) * loopLen;
+    return this._loopSample + within;
+  }
+
+  setLoop(sample: number | null): void {
+    this._loopSample = sample;
+    // Propagate to the running source so the change takes effect at the
+    // next loop boundary without needing to restart playback.
+    if (this._source) {
+      if (sample !== null && sample < this.totalSamples) {
+        this._source.loop = true;
+        this._source.loopStart = sample / this.sampleRate;
+        this._source.loopEnd = this.totalSamples / this.sampleRate;
+      } else {
+        this._source.loop = false;
+      }
+    }
   }
 
   pause(): void {

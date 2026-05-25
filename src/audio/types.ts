@@ -43,6 +43,12 @@ export interface AudioRenderer {
    *  starting from that point. */
   invalidate(fromSample?: number): void;
 
+  /** Configure looping. When `sample` is non-null, on reaching the end of
+   *  the file playback wraps back to that sample and continues. Pass null
+   *  to disable looping. Takes effect at the next loop iteration if
+   *  playback is in flight. */
+  setLoop(sample: number | null): void;
+
   /** Subscribe to playhead movement. Returns an unsubscribe fn. */
   onSampleAdvance(listener: SampleAdvanceListener): () => void;
 
