@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.vite/
+.DS_Store
+
+# Build artifact — emitted by core/wasm/build.sh, regenerated locally and in CI.
+src/wasm/vgmcore.js
+
+# Generated demo VGM (run scripts/make_test_vgm.mjs to recreate).
+scripts/sample.vgm
