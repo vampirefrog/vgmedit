@@ -107,6 +107,12 @@ export function Timeline() {
   const overlayRef = useRef<HTMLDivElement>(null);
   const [areaWidthCss, setAreaWidthCss] = useState(0);
 
+  // The overlay only mounts once a file is loaded (Timeline early-returns
+  // before that), so depend on `file` to re-run this effect when the
+  // element actually exists. Without this dep the observer attached during
+  // the no-file render saw a null ref, returned early, and was never
+  // reattached — leaving areaWidthCss at 0 and making conv.pxToSample
+  // overflow into a clamped-to-totalSamples cursor for every click.
   useEffect(() => {
     const wrap = overlayRef.current;
     if (!wrap) return;
@@ -118,7 +124,7 @@ export function Timeline() {
     });
     ro.observe(wrap);
     return () => ro.disconnect();
-  }, []);
+  }, [file]);
 
   const conv: SamplePxConverter = useMemo(() => {
     const span = Math.max(1, view.endSample - view.startSample);
