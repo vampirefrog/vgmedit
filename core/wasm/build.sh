@@ -127,3 +127,34 @@ em++ "${OBJS[@]}" \
   -o "$OUT_DIR/vgmcore.js"
 
 echo "[build] $OUT_DIR/vgmcore.js"
+
+# ---- 4. AudioWorklet bundle ----------------------------------------------
+# AudioWorkletGlobalScope only loads classic scripts (no ES module imports,
+# no fetch). Build a second target with EXPORT_ES6 off and the WASM
+# embedded via SINGLE_FILE, then concatenate the processor wrapper so the
+# whole audio runtime ships as one self-contained file that addModule()
+# can load.
+PUBLIC_DIR="$ROOT/public"
+mkdir -p "$PUBLIC_DIR"
+WORKLET_TMP="$OBJ_DIR/vgmcore-worklet-libvgm.js"
+
+em++ "${OBJS[@]}" \
+  "$LIBVGM_BUILD/bin/libvgm-player.a" \
+  "$LIBVGM_BUILD/bin/libvgm-emu.a" \
+  "$LIBVGM_BUILD/bin/libvgm-utils.a" \
+  -O2 \
+  -sUSE_ZLIB=1 \
+  -sMODULARIZE=1 \
+  -sENVIRONMENT=worker \
+  -sWASM_BIGINT=1 \
+  -sALLOW_MEMORY_GROWTH=1 \
+  -sSINGLE_FILE=1 \
+  -sEXPORT_NAME=createVgmCoreWorklet \
+  -sEXPORTED_FUNCTIONS="$EXPORT_LIST" \
+  -sEXPORTED_RUNTIME_METHODS=UTF8ToString \
+  -o "$WORKLET_TMP"
+
+cat "$WORKLET_TMP" "$CORE_DIR/wasm/worklet-processor.js" \
+  > "$PUBLIC_DIR/vgm-realtime-worklet.js"
+rm "$WORKLET_TMP"
+echo "[build] $PUBLIC_DIR/vgm-realtime-worklet.js"

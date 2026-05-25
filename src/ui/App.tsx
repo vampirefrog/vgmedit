@@ -11,7 +11,7 @@
  * and after undo/redo. Cursor position carries across instances so
  * playback resumes at the playhead.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useEditorStore } from '../state/store.js';
 import { Timeline } from './timeline/Timeline.js';
 import { CommandList } from './CommandList.js';
@@ -19,8 +19,7 @@ import { Inspector } from './Inspector.js';
 import { Toolbar } from './Toolbar.js';
 import { DropZone } from './DropZone.js';
 import { HorizontalSplitter } from './Splitter.js';
-import { RealtimeVgmAudioRenderer } from '../audio/realtime.js';
-import { getCachedModule } from '../wasm/index.js';
+import { WorkletVgmAudioRenderer } from '../audio/worklet-renderer.js';
 import type { AudioRenderer } from '../audio/types.js';
 
 const MIN_BOTTOM_HEIGHT = 120;
@@ -40,12 +39,17 @@ export function App() {
 
   const [audio, setAudio] = useState<AudioRenderer | null>(null);
   const [bottomHeight, setBottomHeight] = useState(320);
+  /** Lazily-created AudioContext shared across renderer instances.
+   *  Created on the user's first play gesture (browsers disallow audio
+   *  contexts that haven't been resumed by a gesture). Reused across
+   *  edits so we don't churn through OS audio sessions. */
+  const audioCtxRef = useRef<AudioContext | null>(null);
 
   // Rebuild the audio renderer whenever the file or revision changes.
-  // The realtime renderer holds its own libvgm instance; on edits we
-  // dispose the old one and open a new one with the freshly-serialized
-  // bytes so playback reflects the current file. Cursor + playing carry
-  // across so playback resumes seamlessly.
+  // Each renderer owns its own libvgm instance inside the AudioWorklet;
+  // on edits we dispose the old one and open a new one with the
+  // freshly-serialized bytes so playback reflects the current file.
+  // Cursor + playing state carry across so playback resumes seamlessly.
   useEffect(() => {
     if (!file) {
       audio?.dispose();
@@ -53,13 +57,14 @@ export function App() {
       setPlaying(false);
       return;
     }
-    const mod = getCachedModule();
-    if (!mod) return;  // Shouldn't happen once a file is loaded.
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new AudioContext({ sampleRate: 44100 });
+    }
     const wasPlaying = audio?.playing ?? false;
     const initial = audio?.currentSample ?? cursor;
     audio?.dispose();
-    const next = new RealtimeVgmAudioRenderer({
-      mod,
+    const next = new WorkletVgmAudioRenderer({
+      ctx: audioCtxRef.current,
       bytes: file.serialize(),
       sampleRate: 44100,
       initialSample: initial,
@@ -120,12 +125,12 @@ export function App() {
         }
         const state = useEditorStore.getState();
         if (e.shiftKey && state.selection) {
-          // Shift+Space: loop the selected sample range. The realtime
-          // renderer seeks back to selection.start on every cross of
-          // selection.end so the user can audition the loop transition
-          // exactly as libvgm would play it.
+          // Shift+Space: loop the selected sample range. The renderer
+          // seeks back to selection.start on every cross of selection.end
+          // so the user can audition the loop transition exactly as
+          // libvgm would play it.
           const sel = state.selection;
-          (audio as RealtimeVgmAudioRenderer).setSelectionLoop?.({ start: sel.start, end: sel.end });
+          (audio as WorkletVgmAudioRenderer).setSelectionLoop?.({ start: sel.start, end: sel.end });
           void (async () => {
             await audio.seek(sel.start);
             await audio.play();
@@ -135,7 +140,7 @@ export function App() {
           // Normal Space: play from the edit cursor. Clear any
           // selection-loop mode so playback uses the file's loop point
           // (or runs to EOF and stops).
-          (audio as RealtimeVgmAudioRenderer).setSelectionLoop?.(null);
+          (audio as WorkletVgmAudioRenderer).setSelectionLoop?.(null);
           const startSample = state.cursor;
           void (async () => {
             await audio.seek(startSample);
