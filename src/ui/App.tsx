@@ -29,9 +29,26 @@ export function App() {
   const setCursor = useEditorStore((s) => s.setCursor);
   const setPlaying = useEditorStore((s) => s.setPlaying);
   const revision = useEditorStore((s) => s.revision);
+  const deleteSelection = useEditorStore((s) => s.deleteSelection);
 
   const [audio, setAudio] = useState<AudioRenderer | null>(null);
   const [bottomHeight, setBottomHeight] = useState(320);
+
+  // Delete key removes the current selection (boundary waits trimmed).
+  // Ignored when an editable element has focus so it doesn't fight with
+  // the inspector form fields.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      const rc = deleteSelection();
+      // -4 just means "no selection" — silent no-op for an unmodified Del press.
+      if (rc === 0) e.preventDefault();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [deleteSelection]);
 
   // Any edit invalidates the renderer state so the next playback / seek
   // re-renders from scratch. (Per spec: edits force full re-render until we

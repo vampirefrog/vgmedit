@@ -35,6 +35,7 @@ export function Inspector() {
   const deleteCommand = useEditorStore((s) => s.deleteCommand);
   const setLoopIndex = useEditorStore((s) => s.setLoopIndex);
   const setLoopAtCursor = useEditorStore((s) => s.setLoopAtCursor);
+  const deleteSelection = useEditorStore((s) => s.deleteSelection);
 
   const [cmd, setCmd] = useState<VgmCommand | null>(null);
   const [formatted, setFormatted] = useState<string>('');
@@ -152,8 +153,15 @@ export function Inspector() {
         <div className="mono" style={{ fontSize: 11 }}>
           cursor: {Math.round(cursor)}<br />
           view: {Math.round(view.startSample)}–{Math.round(view.endSample)}<br />
-          selection: {selection ? `${selection.start}–${selection.end}` : '—'}
+          selection: {selection ? `${selection.start}–${selection.end} (${selection.end - selection.start} samples)` : '—'}
         </div>
+      </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+        <button
+          disabled={!selection}
+          onClick={() => setEditStatus(describeRc('delete selection', deleteSelection()))}
+          title="Delete the selected sample range (Del key). Wait commands crossing the boundary are trimmed."
+        >delete selection (Del)</button>
       </div>
 
       <h3 style={{ marginTop: 18 }}>loop</h3>

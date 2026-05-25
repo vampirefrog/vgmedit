@@ -389,7 +389,7 @@ export function Timeline() {
       <div style={{ padding: '2px 10px', fontSize: 10, color: 'var(--text-dim)', borderTop: '1px solid var(--border)' }}>
         view {Math.round(view.startSample)}–{Math.round(view.endSample)} of {totalSamples}
         {' · '}
-        wheel: zoom · shift+wheel: pan · drag: select · middle-drag: pan
+        wheel: zoom · shift+wheel: pan · drag: select · middle-drag: pan · Del: delete selection
       </div>
     </div>
   );

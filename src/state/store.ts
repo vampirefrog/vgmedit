@@ -71,6 +71,10 @@ export interface EditorState {
   /** Convenience: find the command at the current cursor sample and set
    *  the loop there. */
   setLoopAtCursor: () => number;
+
+  /** Delete the current selection. Trims boundary-crossing waits. Cursor
+   *  snaps to the (now-shortened) selection start; selection clears. */
+  deleteSelection: () => number;
 }
 
 function clampView(view: TimelineView, total: number): TimelineView {
@@ -225,6 +229,23 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (idx < 0) return -4;
     const rc = file.setLoopIndex(idx);
     if (rc === 0) afterEdit(set, file);
+    return rc;
+  },
+
+  deleteSelection: () => {
+    const { file, selection } = get();
+    if (!file || !selection) return -4;
+    const rc = file.deleteRange(selection.start, selection.end);
+    if (rc === 0) {
+      afterEdit(set, file);
+      // Snap cursor to where the cut joined and clear the (now-stale)
+      // selection. Selected command may have moved/gone — drop it too.
+      set({
+        cursor: selection.start,
+        selection: null,
+        selectedCommandIndex: null,
+      });
+    }
     return rc;
   },
 }));

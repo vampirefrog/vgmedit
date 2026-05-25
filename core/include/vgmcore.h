@@ -169,6 +169,14 @@ int vgm_delete_command(vgm_file_t *file, uint32_t index);
 int vgm_update_command(vgm_file_t *file, uint32_t index,
                        uint8_t opcode, const uint8_t *args, uint32_t arg_size);
 
+/* Delete every non-wait command whose sample_time falls in [start_sample,
+ * end_sample), and trim wait commands whose [t, t+advance) interval overlaps
+ * the range by exactly the overlap length. Waits that get trimmed to a
+ * non-trivial value are rewritten as a 0x61 (16-bit wait) command; waits
+ * fully consumed by the range are dropped. Sample times are recomputed
+ * across the whole file afterward. */
+int vgm_delete_range(vgm_file_t *file, uint64_t start_sample, uint64_t end_sample);
+
 /* Re-emit the current command list as a VGM byte stream. Returns the byte
  * count required; if `buf` is NULL or `buf_size` is 0, computes the size
  * without writing. */

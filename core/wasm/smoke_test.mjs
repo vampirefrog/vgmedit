@@ -261,6 +261,73 @@ mod._vgm_set_loop_index(handle, -1);
 if (mod._vgm_get_loop_index(handle) !== -1) { console.log('clear loop failed'); pass = false; }
 else console.log('clear loop works');
 
+// --- vgm_delete_range coverage --------------------------------------- //
+console.log();
+console.log('--- delete_range covering both boundary waits ---');
+// Build a fresh tiny file:
+//   YM2612 reg write @0, wait 100, reg write @100, wait 200, reg write @300, end
+function buildBoundaryVgm() {
+  const cmds = new Uint8Array([
+    0x52, 0x22, 0x00,            // @ 0 (non-wait)
+    0x61, 0x64, 0x00,            // wait 100
+    0x52, 0x28, 0x10,            // @ 100 (non-wait, would be deleted)
+    0x61, 0xC8, 0x00,            // wait 200 (spans [100, 300))
+    0x52, 0x28, 0x20,            // @ 300 (kept)
+    0x66,                         // end @ 300
+  ]);
+  const file = new Uint8Array(0xC0 + cmds.length);
+  const dv = new DataView(file.buffer);
+  file[0] = 0x56; file[1] = 0x67; file[2] = 0x6D; file[3] = 0x20;
+  dv.setUint32(0x04, file.length - 0x04, true);
+  dv.setUint32(0x08, 0x171, true);
+  dv.setUint32(0x2C, 7670454, true);
+  dv.setUint32(0x34, 0xC0 - 0x34, true);
+  dv.setUint32(0x18, 300, true);
+  file.set(cmds, 0xC0);
+  return file;
+}
+const tiny = buildBoundaryVgm();
+const tPtr = mod._malloc(tiny.length);
+mod.HEAPU8.set(tiny, tPtr);
+const tStat = mod._malloc(4);
+const ht = mod._vgm_open(tPtr, tiny.length, tStat);
+mod._free(tPtr); mod._free(tStat);
+
+// Delete samples [50, 250). Expected after delete:
+//   total_samples 100, six commands -> five (one non-wait inside deleted)
+//   - reg @0 (kept)
+//   - wait 50 (was 100, trimmed by overlap 50)
+//   - wait 50 (was 200, trimmed by overlap 150)
+//   - reg @100 (was @300)
+//   - end
+const dRc = mod._vgm_delete_range(ht, 50n, 250n);
+console.log('delete_range rc:', dRc);
+const dCount = mod._vgm_command_count(ht);
+console.log(`command count after delete: ${dCount} (expected 5)`);
+const hdrPtr = mod._vgm_header(ht);
+const newTotal = mod.HEAPU32[(hdrPtr + 16) >>> 2];
+console.log(`new total_samples: ${newTotal} (expected 100)`);
+const eBuf = mod._malloc(mod._vgm_sizeof_command_entry());
+const expectedEntries = [
+  { op: 0x52, t: 0 },     // reg @ 0
+  { op: 0x61, t: 0 },     // trimmed wait
+  { op: 0x61, t: 50 },    // trimmed wait
+  { op: 0x52, t: 100 },   // reg, shifted from 300 to 100
+  { op: 0x66, t: 100 },   // end
+];
+for (let i = 0; i < dCount; i++) {
+  mod._vgm_get_command(ht, i, eBuf);
+  const sampleLo = mod.HEAPU32[eBuf >>> 2];
+  const opcode = mod.HEAPU8[eBuf + 16];
+  const exp = expectedEntries[i];
+  const ok = exp && exp.op === opcode && exp.t === sampleLo;
+  console.log(`  [${i}] op=${opcode.toString(16)} t=${sampleLo}` + (ok ? '' : ` ≠ ${JSON.stringify(exp)}`));
+  if (!ok) pass = false;
+}
+if (dCount !== expectedEntries.length || newTotal !== 100) pass = false;
+mod._free(eBuf);
+mod._vgm_close(ht);
+
 mod._free(entryBuf);
 mod._free(fmtBuf);
 mod._vgm_close(handle);

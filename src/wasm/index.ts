@@ -289,6 +289,19 @@ export class VgmFile {
     return rc;
   }
 
+  /** Delete commands in the sample range [start, end). Waits crossing the
+   *  boundary are trimmed by their overlap with the range, non-wait
+   *  commands inside the range are dropped. */
+  deleteRange(startSample: number, endSample: number): number {
+    const rc = this.mod._vgm_delete_range(
+      this.handle,
+      BigInt(Math.max(0, Math.floor(startSample))),
+      BigInt(Math.max(0, Math.floor(endSample))),
+    );
+    if (rc === 0) this.refresh();
+    return rc;
+  }
+
   /** Re-emit the current command list as a VGM byte stream. */
   serialize(): Uint8Array {
     const needed = this.mod._vgm_serialize(this.handle, 0, 0);

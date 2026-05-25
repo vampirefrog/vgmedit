@@ -24,6 +24,7 @@
 #include "vgmcore.h"
 #include "vgmcore_internal.h"
 
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -239,6 +240,102 @@ int vgm_serialize(const vgm_file_t *file, uint8_t *buf, uint32_t buf_size) {
         }
     }
     return (int)total;
+}
+
+int vgm_delete_range(vgm_file_t *file, uint64_t start_sample, uint64_t end_sample) {
+    if (!file) return VGM_ERR_INVALID_ARG;
+    if (file->command_count == 0) return VGM_OK;
+    if (end_sample > file->header.total_samples) end_sample = file->header.total_samples;
+    if (start_sample >= end_sample) return VGM_OK;
+
+    /* Walk the command list, compacting kept commands into the front. Each
+     * iteration either keeps the entry (possibly rewriting a partially-
+     * overlapped wait into a fresh 0x61 with the trimmed amount) or drops
+     * it. The synth_args pointers are moved in lockstep; freed slots are
+     * NULLed out at the end so the eventual close doesn't double-free. */
+    uint32_t write = 0;
+    for (uint32_t read = 0; read < file->command_count; read++) {
+        vgm_command_entry_t entry = file->commands[read];
+        uint8_t *old_owned = file->synth_args[read];
+
+        const uint8_t *args = (entry.file_offset == VGM_SYNTH_OFFSET)
+                                  ? old_owned
+                                  : (file->data + entry.file_offset + 1);
+        uint32_t advance = vgm_command_wait_advance(entry.opcode, args, entry.arg_size);
+        uint64_t t = entry.sample_time;
+
+        bool keep = true;
+        bool rewrite_as_61 = false;
+        uint32_t new_advance = advance;
+
+        if (advance == 0) {
+            /* Non-wait — delete iff sample_time falls inside [start, end). */
+            if (t >= start_sample && t < end_sample) keep = false;
+        } else {
+            /* Wait — overlap is the intersection of [t, t+advance) with
+             * [start, end). The new advance is the old minus that overlap. */
+            uint64_t cmd_end = t + advance;
+            uint64_t ov_lo = t > start_sample ? t : start_sample;
+            uint64_t ov_hi = cmd_end < end_sample ? cmd_end : end_sample;
+            if (ov_hi > ov_lo) {
+                uint64_t overlap = ov_hi - ov_lo;
+                if (overlap >= advance) {
+                    keep = false;
+                } else {
+                    new_advance = (uint32_t)(advance - overlap);
+                    /* Even when the original wait was a one-byte form
+                     * (0x62 / 0x63 / 0x70-0x7F / 0x80-0x8F), rewrite as a
+                     * canonical 0x61 since that's the only form that can
+                     * carry an arbitrary 0-65535 sample count. We lose any
+                     * 0x80-0x8F DAC write that sat in the selection, which
+                     * is fine — that DAC byte was inside the deleted range. */
+                    rewrite_as_61 = true;
+                }
+            }
+        }
+
+        if (!keep) {
+            free(old_owned);
+            continue;
+        }
+
+        if (rewrite_as_61) {
+            free(old_owned);
+            uint8_t *new_args = (uint8_t *)malloc(2);
+            if (!new_args) return VGM_ERR_OUT_OF_MEMORY;
+            new_args[0] = (uint8_t)(new_advance & 0xFF);
+            new_args[1] = (uint8_t)((new_advance >> 8) & 0xFF);
+            entry.opcode = 0x61;
+            entry.arg_size = 2;
+            entry.file_offset = VGM_SYNTH_OFFSET;
+            entry.chip_id = (uint8_t)VGM_CHIP_CONTROL;
+            file->synth_args[write] = new_args;
+        } else {
+            /* Move the existing args pointer along — when read == write
+             * this is a self-assignment, otherwise it transfers ownership.
+             * The trailing synth_args slot will be NULLed below. */
+            file->synth_args[write] = old_owned;
+        }
+
+        file->commands[write] = entry;
+        write++;
+    }
+
+    /* Null out any slots above the new tail so they don't carry dangling
+     * pointers into the next close/edit. */
+    for (uint32_t i = write; i < file->command_capacity; i++) {
+        file->synth_args[i] = NULL;
+    }
+    file->command_count = write;
+
+    recompute_sample_times_from(file, 0);
+    /* Rebuild used_chips after deletion. */
+    vgm_chip_mask_t used = 0;
+    for (uint32_t i = 0; i < file->command_count; i++) {
+        used |= VGM_CHIP_BIT(file->commands[i].chip_id);
+    }
+    file->used_chips = used;
+    return VGM_OK;
 }
 
 int vgm_get_loop_index(const vgm_file_t *file) {
