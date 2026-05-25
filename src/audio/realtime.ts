@@ -101,42 +101,59 @@ export class RealtimeVgmAudioRenderer implements AudioRenderer {
       const right = e.outputBuffer.getChannelData(1);
       const N = left.length;
 
-      const got = mod._libvgm_render_s16(player, scratchPtr, N);
-      const src = new Int16Array(mod.HEAPU8.buffer, scratchPtr, got * 2);
-      for (let i = 0; i < got; i++) {
-        left[i]  = src[i * 2]     / 32768;
-        right[i] = src[i * 2 + 1] / 32768;
-      }
-      // Zero-pad any trailing samples we couldn't produce so the audio
-      // graph doesn't read uninitialised memory.
-      for (let i = got; i < N; i++) { left[i] = 0; right[i] = 0; }
+      let produced = 0;
+      let shouldStop = false;
 
-      this._currentSample = Number(mod._libvgm_current_sample(player));
-
-      // Selection loop: wrap whenever the playhead crosses the end of
-      // the loop region. Done by seeking libvgm back to the loop start —
-      // chip state is re-established at that point so the user hears
-      // the same transition each cycle (which is the whole reason for
-      // this mode).
-      if (this._selectionLoop) {
-        if (this._currentSample >= this._selectionLoop.end) {
-          mod._libvgm_seek_sample(player, BigInt(this._selectionLoop.start));
-          this._currentSample = this._selectionLoop.start;
+      while (produced < N) {
+        // Selection loop: cap render at the loop-end and seek back to
+        // the loop-start when we hit it. libvgm doesn't know about the
+        // selection, so this is done by hand.
+        if (this._selectionLoop) {
+          const room = this._selectionLoop.end - this.wrapToDisplay(
+            Number(mod._libvgm_current_sample(player))
+          );
+          if (room <= 0) {
+            mod._libvgm_seek_sample(player, BigInt(this._selectionLoop.start));
+            continue;
+          }
+          const want = Math.min(N - produced, Math.floor(room));
+          const got = mod._libvgm_render_s16(player, scratchPtr, want);
+          if (got === 0) { shouldStop = true; break; }
+          copyRange(scratchPtr, left, right, produced, got, mod);
+          produced += got;
+          continue;
         }
-      } else if (got === 0) {
-        // Natural end-of-file. Loop back to loop_sample if one is set,
-        // otherwise schedule a stop.
-        if (this._loopSample !== null && this._loopSample < this._totalSamples) {
-          mod._libvgm_seek_sample(player, BigInt(this._loopSample));
-          this._currentSample = this._loopSample;
-        } else {
-          // Defer to a microtask so we don't disconnect from inside the
-          // audio callback.
-          queueMicrotask(() => this.pause());
+
+        // No selection loop. With libvgm's huge internal loopCount, a
+        // file with a loop point will produce samples indefinitely and
+        // never report EOF here — we just keep rendering. A non-looping
+        // file will eventually have current_sample >= total; we stop
+        // then. got=0 is a safety net for unexpected libvgm behaviour.
+        const got = mod._libvgm_render_s16(player, scratchPtr, N - produced);
+        if (got === 0) { shouldStop = true; break; }
+        copyRange(scratchPtr, left, right, produced, got, mod);
+        produced += got;
+
+        const cumulative = Number(mod._libvgm_current_sample(player));
+        // No file-loop and we've consumed the file once — stop cleanly.
+        if (this._loopSample === null && cumulative >= this._totalSamples) {
+          shouldStop = true;
+          break;
         }
       }
 
+      // Zero-pad any trailing samples we couldn't fill.
+      for (let i = produced; i < N; i++) { left[i] = 0; right[i] = 0; }
+
+      // Update display cursor (wrapped into [0, totalSamples]).
+      this._currentSample = this.wrapToDisplay(Number(mod._libvgm_current_sample(player)));
       this.emitSample();
+
+      if (shouldStop) {
+        // Defer the disconnect — disconnecting inside the audio callback
+        // is undefined behaviour.
+        queueMicrotask(() => this.pause());
+      }
     };
 
     node.connect(this._ctx.destination);
@@ -215,6 +232,18 @@ export class RealtimeVgmAudioRenderer implements AudioRenderer {
     }
   }
 
+  /** Map libvgm's cumulative sample count (which grows monotonically and
+   *  is many times larger than totalSamples once the song has looped
+   *  internally) back into the visible [0, totalSamples] range. */
+  private wrapToDisplay(cumulative: number): number {
+    if (cumulative <= this._totalSamples) return cumulative;
+    if (this._loopSample === null || this._loopSample >= this._totalSamples) {
+      return this._totalSamples;
+    }
+    const loopLen = this._totalSamples - this._loopSample;
+    return this._loopSample + ((cumulative - this._totalSamples) % loopLen);
+  }
+
   private setPlaying(p: boolean): void {
     if (this._playing === p) return;
     this._playing = p;
@@ -223,5 +252,18 @@ export class RealtimeVgmAudioRenderer implements AudioRenderer {
 
   private emitSample(): void {
     for (const l of this.listeners) l(this._currentSample);
+  }
+}
+
+function copyRange(
+  scratchPtr: number,
+  left: Float32Array, right: Float32Array,
+  offset: number, frames: number,
+  mod: VgmCoreModule,
+): void {
+  const src = new Int16Array(mod.HEAPU8.buffer, scratchPtr, frames * 2);
+  for (let i = 0; i < frames; i++) {
+    left[offset + i]  = src[i * 2]     / 32768;
+    right[offset + i] = src[i * 2 + 1] / 32768;
   }
 }

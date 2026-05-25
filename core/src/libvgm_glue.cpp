@@ -64,7 +64,13 @@ libvgm_player_t *libvgm_open(const uint8_t *data, uint32_t size, uint32_t sample
     {
         PlayerA::Config cfg = p->player.GetConfiguration();
         cfg.masterVol = 0x10000;      // 1.0
-        cfg.loopCount = 1;             // play looping section once before fade
+        // Large loop count so libvgm handles file-loop wrap-around
+        // internally — chip state persists across the boundary, which
+        // is what we want to be audible in the editor. The renderer
+        // detects "no loop" files separately via current_sample >=
+        // total_samples and stops then. ~24 days of loops for a 60 s
+        // looping file should suffice for any editor session.
+        cfg.loopCount = 1000000;
         cfg.fadeSmpls = 0;             // no fade — the editor decides looping
         cfg.endSilenceSmpls = 0;
         cfg.pbSpeed = 1.0;
