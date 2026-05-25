@@ -10,7 +10,7 @@
  * - The formatted text is fetched lazily per visible row from the C side
  *   (snprintf into a scratch buffer). For ~30 visible rows this is trivial.
  */
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useEditorStore } from '../state/store.js';
 import { VGM_SAMPLE_RATE, type VgmFile } from '../wasm/index.js';
@@ -21,6 +21,19 @@ interface FilteredView {
   /** Either an array of file-command-indices, or null meaning "use everything". */
   indices: number[] | null;
   total: number;
+}
+
+/** First index `i` such that `arr[i] >= target`. Returns arr.length when
+ *  target is greater than every element. */
+function bsearchLowerBound(arr: number[], target: number): number {
+  let lo = 0;
+  let hi = arr.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (arr[mid] < target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
 }
 
 function buildFilter(file: VgmFile, selStart: number | null, selEnd: number | null): FilteredView {
@@ -47,6 +60,7 @@ export function CommandList() {
   const selectedCommandIndex = useEditorStore((s) => s.selectedCommandIndex);
   const setSelectedCommand = useEditorStore((s) => s.setSelectedCommand);
   const setCursor = useEditorStore((s) => s.setCursor);
+  const cursor = useEditorStore((s) => s.cursor);
   // Watching commandCount + revision guarantees we recompute the filter and
   // re-render rows after every edit. The file object itself is mutated
   // in place so its reference doesn't change.
@@ -68,6 +82,28 @@ export function CommandList() {
     estimateSize: () => ROW_HEIGHT,
     overscan: 8,
   });
+
+  // Auto-scroll to the command at the cursor's sample position whenever
+  // the cursor moves. Binary search in C-space (~log₂N WASM hops) finds
+  // the file-side index, then a sorted-array bsearch maps it into the
+  // filtered visual index when a selection is active.
+  useEffect(() => {
+    if (!file || visibleCount === 0) return;
+    const fileIdx = file.findCommandIndexAtSample(cursor);
+    if (fileIdx < 0) return;
+    let visualIdx = fileIdx;
+    if (filter.indices) {
+      // Map file index to its position in the filtered list; if `fileIdx`
+      // sits in a gap (outside the selection), snap to the nearest
+      // visible neighbour rather than scrolling out of range.
+      visualIdx = bsearchLowerBound(filter.indices, fileIdx);
+      if (visualIdx >= filter.indices.length) visualIdx = filter.indices.length - 1;
+    }
+    if (visualIdx >= 0 && visualIdx < visibleCount) {
+      rowVirtualizer.scrollToIndex(visualIdx, { align: 'center' });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cursor, file, visibleCount, revision]);
 
   if (!file) {
     return (

@@ -121,10 +121,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     cursor: Math.max(0, Math.min(s.totalSamples, Math.floor(sample))),
   })),
 
-  setSelection: (sel) => set(() => {
+  setSelection: (sel) => set((s) => {
     if (!sel) return { selection: null };
-    const start = Math.min(sel.start, sel.end);
-    const end = Math.max(sel.start, sel.end);
+    const total = s.totalSamples;
+    // Clamp both endpoints into the valid sample range so a drag that
+    // wandered past either end of the file (or out of the overlay box)
+    // can't produce a selection that extends beyond what actually exists.
+    const a = Math.max(0, Math.min(total, sel.start));
+    const b = Math.max(0, Math.min(total, sel.end));
+    const start = Math.min(a, b);
+    const end = Math.max(a, b);
     if (end - start < 1) return { selection: null };
     return { selection: { start: Math.floor(start), end: Math.floor(end) } };
   }),

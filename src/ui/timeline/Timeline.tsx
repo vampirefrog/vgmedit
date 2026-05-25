@@ -139,11 +139,15 @@ export function Timeline() {
   type MiddleDrag = { kind: 'pan'; startX: number; startStart: number; startEnd: number };
   const dragRef = useRef<LeftDrag | MiddleDrag | null>(null);
 
+  /** Convert a viewport-x to an overlay-relative pixel, clamped so the
+   *  caller never gets a value outside the visible canvas column. */
+  function clientXToOverlayPx(clientX: number, rect: DOMRect): number {
+    return Math.max(0, Math.min(rect.width, clientX - rect.left));
+  }
+
   function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
     if (!file) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    if (px < 0) return;
     if (e.button === 1) {
       // Middle button — pan. Prevent the OS/browser middle-click auto-scroll.
       e.preventDefault();
@@ -157,10 +161,15 @@ export function Timeline() {
       return;
     }
     if (e.button !== 0) return;
+    const px = clientXToOverlayPx(e.clientX, rect);
     const sample = conv.pxToSample(px);
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     dragRef.current = { kind: 'select', startSample: sample, startX: px };
     setCursor(sample);
+    // Pressing the button moves the cursor; that immediately invalidates
+    // any prior selection so the user gets a clean state to either click
+    // (cursor only) or drag (new selection).
+    setSelection(null);
   }
 
   function onPointerMove(e: React.PointerEvent<HTMLDivElement>) {
@@ -177,7 +186,7 @@ export function Timeline() {
       return;
     }
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const px = e.clientX - rect.left;
+    const px = clientXToOverlayPx(e.clientX, rect);
     const sample = conv.pxToSample(px);
     const dx = Math.abs(px - drag.startX);
     if (dx > 3) {
@@ -189,16 +198,6 @@ export function Timeline() {
   function onPointerUp(e: React.PointerEvent<HTMLDivElement>) {
     if (!dragRef.current) return;
     (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-    const drag = dragRef.current;
-    if (drag.kind === 'select') {
-      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      const px = e.clientX - rect.left;
-      const dx = Math.abs(px - drag.startX);
-      if (dx <= 3) {
-        // Click — clear selection
-        setSelection(null);
-      }
-    }
     dragRef.current = null;
   }
 
@@ -237,9 +236,19 @@ export function Timeline() {
     );
   }
 
-  const cursorPx = conv.sampleToPx(cursor);
-  const selStartPx = selection ? conv.sampleToPx(selection.start) : 0;
-  const selEndPx = selection ? conv.sampleToPx(selection.end) : 0;
+  // Clip the cursor and selection band to the overlay's visible column so
+  // they can never paint over the track labels on the left. When the
+  // selection extends beyond the current view, only its visible slice is
+  // drawn — and clientWidth comes from the live areaWidthCss so the math
+  // matches whatever the layout currently is.
+  const cursorPx = Math.max(0, Math.min(areaWidthCss, conv.sampleToPx(cursor)));
+  let selStartPx = 0, selWidth = 0;
+  if (selection) {
+    const l = Math.max(0, Math.min(areaWidthCss, conv.sampleToPx(selection.start)));
+    const r = Math.max(0, Math.min(areaWidthCss, conv.sampleToPx(selection.end)));
+    selStartPx = l;
+    selWidth = Math.max(0, r - l);
+  }
 
   return (
     <div className="timeline-pane" style={{ display: 'flex', flexDirection: 'column' }}>
@@ -288,15 +297,16 @@ export function Timeline() {
             touchAction: 'none',
           }}
         >
-          {/* Selection band */}
-          {selection && (
+          {/* Selection band — only render when at least one pixel is
+              visible inside the overlay column. */}
+          {selection && selWidth > 0 && (
             <div
               style={{
                 position: 'absolute',
                 top: 0,
                 bottom: 0,
                 left: selStartPx,
-                width: Math.max(1, selEndPx - selStartPx),
+                width: selWidth,
                 background: 'var(--selection)',
                 borderLeft: '1px solid var(--selection-stroke)',
                 borderRight: '1px solid var(--selection-stroke)',

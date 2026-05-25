@@ -316,6 +316,22 @@ export class VgmFile {
     return this.mod._vgm_used_chip_mask(this.handle);
   }
 
+  /** Index of the command with the largest sample_time ≤ `sample`. Returns
+   *  -1 when `sample` is before any command, or commandCount-1 when it's
+   *  past the last. Binary search — ~log₂N WASM round-trips per call. */
+  findCommandIndexAtSample(sample: number): number {
+    if (this.commandCount === 0) return -1;
+    let lo = 0;
+    let hi = this.commandCount;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      const cmd = this.getCommand(mid);
+      if (cmd.sampleTime > sample) hi = mid;
+      else lo = mid + 1;
+    }
+    return lo - 1;
+  }
+
   chipName(chip: VgmChipId, short = false): string {
     return getChipNameSync(this.mod, chip, short);
   }
