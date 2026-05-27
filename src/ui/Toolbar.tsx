@@ -99,6 +99,8 @@ export function Toolbar({ audio }: ToolbarProps) {
       <span className="time">
         {(cursor / VGM_SAMPLE_RATE).toFixed(3)}s / {(totalSamples / VGM_SAMPLE_RATE).toFixed(3)}s
       </span>
+      <a className="toolbar-link" href="https://github.com/vampirefrog/vgmedit" target="_blank" rel="noopener noreferrer">GitHub</a>
+      <a className="toolbar-link" href="https://vampi.tech" target="_blank" rel="noopener noreferrer">vampi.tech</a>
     </div>
   );
 }

@@ -92,6 +92,17 @@ select {
   color: var(--text-dim);
 }
 
+.toolbar-link {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+.toolbar-link:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
 .main {
   display: flex;
   flex-direction: column;
